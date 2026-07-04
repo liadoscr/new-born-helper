@@ -4,6 +4,7 @@ const PEE_GOAL = 5;
 const POOP_GOAL = 3;
 const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
 const AUTH_STORAGE_KEY = "lullaby-log-auth-user-v1";
+const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
 const GOOGLE_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 
 const GUEST_USER = {
@@ -31,6 +32,8 @@ let undo = null;
 let undoTimer = null;
 let deferredInstallPrompt = null;
 let googleReady = false;
+let nextFeedingNotificationTimer = null;
+let scheduledNotificationAt = "";
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -51,6 +54,8 @@ const els = {
   menuUserEmail: document.querySelector("#menuUserEmail"),
   menuUserName: document.querySelector("#menuUserName"),
   navButtons: document.querySelectorAll("[data-view-target]"),
+  notificationButton: document.querySelector("#enableNotificationsButton"),
+  notificationStatus: document.querySelector("#notificationStatus"),
   nextFeedRelative: document.querySelector("#nextFeedRelative"),
   nextFeedText: document.querySelector("#nextFeedText"),
   nextSideText: document.querySelector("#nextSideText"),
@@ -111,6 +116,7 @@ function init() {
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
   els.resetDataButton.addEventListener("click", openResetDialog);
+  els.notificationButton.addEventListener("click", toggleNotifications);
   els.resetDialog.addEventListener("close", () => {
     if (els.resetDialog.returnValue === "confirm") resetCurrentUserData();
   });
@@ -128,6 +134,7 @@ function init() {
   }
 
   renderAuth();
+  renderNotificationState();
   initGoogleAuth();
   render();
   setInterval(render, 1000);
@@ -135,6 +142,10 @@ function init() {
 
 function storageKeyFor(user) {
   return `${LEGACY_STORAGE_KEY}:user:${user.id}`;
+}
+
+function notificationKeyFor(user) {
+  return `${NOTIFICATION_STORAGE_PREFIX}:user:${user.id}`;
 }
 
 function loadAuthUser() {
@@ -180,7 +191,9 @@ function switchUser(user) {
   saveAuthUser(user);
   state = loadState(user);
   clearUndo();
+  clearNextFeedingNotification();
   renderAuth();
+  renderNotificationState();
   render();
 }
 
@@ -303,6 +316,7 @@ function resetCurrentUserData() {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
   }
   state = clone(defaultState);
+  clearNextFeedingNotification();
   clearUndo();
   render();
   showToast("הנתונים אופסו");
@@ -316,6 +330,75 @@ function renderAuth() {
   els.googleSignInButton.hidden = !isGuest;
   els.signOutButton.hidden = isGuest;
   els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : `נשמר עבור ${currentUser.name}`;
+}
+
+function notificationsEnabled() {
+  return localStorage.getItem(notificationKeyFor(currentUser)) === "enabled";
+}
+
+function setNotificationsEnabled(enabled) {
+  if (enabled) {
+    localStorage.setItem(notificationKeyFor(currentUser), "enabled");
+  } else {
+    localStorage.removeItem(notificationKeyFor(currentUser));
+  }
+}
+
+function renderNotificationState() {
+  if (!("Notification" in window)) {
+    els.notificationStatus.textContent = "הדפדפן הזה לא תומך בהתראות";
+    els.notificationButton.textContent = "לא נתמך";
+    els.notificationButton.disabled = true;
+    return;
+  }
+
+  els.notificationButton.disabled = false;
+
+  if (Notification.permission === "denied") {
+    els.notificationStatus.textContent = "ההתראות חסומות בהגדרות המכשיר";
+    els.notificationButton.textContent = "התראות חסומות";
+    els.notificationButton.disabled = true;
+    return;
+  }
+
+  if (notificationsEnabled() && Notification.permission === "granted") {
+    els.notificationStatus.textContent = "התראות פעילות להאכלה הבאה";
+    els.notificationButton.textContent = "כבה התראות";
+    return;
+  }
+
+  els.notificationStatus.textContent = "התראות לא הופעלו";
+  els.notificationButton.textContent = "אפשר התראות";
+}
+
+async function toggleNotifications() {
+  if (notificationsEnabled()) {
+    setNotificationsEnabled(false);
+    clearNextFeedingNotification();
+    renderNotificationState();
+    showToast("התראות כובו");
+    return;
+  }
+
+  const allowed = await requestNotificationPermission();
+  if (!allowed) {
+    renderNotificationState();
+    showToast("לא ניתן להפעיל התראות כרגע");
+    return;
+  }
+
+  setNotificationsEnabled(true);
+  renderNotificationState();
+  scheduleNextFeedingNotification();
+  showToast("התראות הופעלו");
+}
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  const permission = await Notification.requestPermission();
+  return permission === "granted";
 }
 
 function toggleMenu() {
@@ -480,6 +563,7 @@ function renderFeeding(active, latest, latestStarted) {
     els.nextFeedText.textContent = formatTime(nextFeed);
     els.nextFeedRelative.textContent = relativeDueText(nextFeed);
     renderPartnerStatus(nextFeed);
+    scheduleNextFeedingNotification(nextFeed);
   } else {
     els.nextSideText.textContent = "אין נתונים";
     els.lastFeedText.textContent = "אין עדיין הנקה אחרונה";
@@ -489,9 +573,59 @@ function renderFeeding(active, latest, latestStarted) {
     els.partnerActionTitle.textContent = "אין פעולה דחופה";
     els.partnerActionText.textContent = "כשההאכלה תתקרב, כאן תופיע הצעה פרואקטיבית.";
     els.statusDot.className = "live-dot";
+    clearNextFeedingNotification();
   }
 
   renderAuth();
+  renderNotificationState();
+}
+
+function scheduleNextFeedingNotification(nextFeed) {
+  if (!nextFeed) {
+    const latest = state.feedings[0];
+    if (!latest) return;
+    nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
+  }
+
+  if (!notificationsEnabled() || Notification.permission !== "granted") return;
+
+  const msUntil = nextFeed.getTime() - Date.now();
+  const nextFeedIso = nextFeed.toISOString();
+
+  if (msUntil <= 0) {
+    clearNextFeedingNotification();
+    return;
+  }
+
+  if (scheduledNotificationAt === nextFeedIso && nextFeedingNotificationTimer) return;
+
+  clearNextFeedingNotification();
+  scheduledNotificationAt = nextFeedIso;
+  nextFeedingNotificationTimer = setTimeout(() => {
+    sendNextFeedingNotification();
+    clearNextFeedingNotification();
+  }, Math.min(msUntil, 2147483647));
+}
+
+function clearNextFeedingNotification() {
+  clearTimeout(nextFeedingNotificationTimer);
+  nextFeedingNotificationTimer = null;
+  scheduledNotificationAt = "";
+}
+
+function sendNextFeedingNotification() {
+  if (!notificationsEnabled() || Notification.permission !== "granted") return;
+
+  const latest = state.feedings[0];
+  const nextSide = latest ? sideLabel(latest.side === "right" ? "left" : "right") : "";
+  const body = nextSide ? `הגיע זמן ההאכלה. כדאי להתחיל מצד ${nextSide}.` : "הגיע זמן ההאכלה.";
+
+  new Notification("NewBorn Helper", {
+    body,
+    icon: "assets/icon.svg",
+    badge: "assets/icon.svg",
+    tag: "next-feeding",
+  });
 }
 
 function renderSideButtons(active, latest) {

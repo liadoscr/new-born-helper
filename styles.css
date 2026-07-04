@@ -208,6 +208,11 @@ p {
   opacity: 0.58;
 }
 
+.finish-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .config-hint[hidden] {
   display: none;
 }
