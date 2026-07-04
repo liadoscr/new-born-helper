@@ -44,6 +44,12 @@ powershell -ExecutionPolicy Bypass -File .\prepare-deploy.ps1
 
 ## פריסה מומלצת
 
+Production URL:
+
+```text
+https://neon-cajeta-6bc33d.netlify.app/
+```
+
 ### Netlify
 
 1. הרץ `prepare-deploy.ps1`.
@@ -72,7 +78,7 @@ public
 
 ```text
 http://127.0.0.1:5173
-https://YOUR_DOMAIN
+https://neon-cajeta-6bc33d.netlify.app
 ```
 
 3. עדכן את `config.js`:
