@@ -1,0 +1,10 @@
+node-server.err.log
+node-server.out.log
+server.err.log
+server.out.log
+stitch_import/
+lullaby-log-public.zip
+.agents/
+.codex/
+.DS_Store
+Thumbs.db

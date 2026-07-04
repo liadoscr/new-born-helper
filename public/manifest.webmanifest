@@ -1,0 +1,20 @@
+{
+  "name": "Lullaby Log - מעקב הנקה",
+  "short_name": "Lullaby Log",
+  "description": "טיימר הנקה, חיתולים ודשבורד בן זוג במצב לילה.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "he",
+  "background_color": "#121319",
+  "theme_color": "#121319",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

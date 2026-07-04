@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#121319" />
+    <meta name="description" content="אפליקציית עזר להנקה, חיתולים ודשבורד בן זוג." />
+    <title>Lullaby Log - מעקב הנקה</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top-app-bar">
+      <button class="top-icon" id="menuButton" type="button" aria-label="תפריט" aria-controls="appMenu" aria-expanded="false">☰</button>
+      <strong class="brand">Lullaby Log</strong>
+      <button class="top-icon" id="installButton" type="button" aria-label="התקנה למסך הבית">⌂</button>
+    </header>
+
+    <div class="menu-backdrop" id="menuBackdrop" hidden></div>
+    <aside class="app-menu" id="appMenu" aria-label="תפריט אפליקציה" aria-hidden="true">
+      <div class="menu-header">
+        <div>
+          <span class="overline">Lullaby Log</span>
+          <strong id="menuUserName">מצב אורח</strong>
+          <small id="menuUserEmail">הנתונים נשמרים במכשיר הזה</small>
+        </div>
+        <button class="top-icon compact" id="closeMenuButton" type="button" aria-label="סגירת תפריט">×</button>
+      </div>
+
+      <section class="auth-card" aria-labelledby="authTitle">
+        <div>
+          <h2 id="authTitle">חשבון</h2>
+          <p id="authStatus">לא מחובר לגוגל</p>
+        </div>
+        <button class="google-action" id="googleSignInButton" type="button">
+          <span aria-hidden="true">G</span>
+          התחברות עם Google
+        </button>
+        <button class="ghost-action full-width" id="signOutButton" type="button" hidden>התנתקות</button>
+        <p class="config-hint" id="googleConfigHint">כדי להפעיל התחברות אמיתית, יש להגדיר Google Client ID בקובץ config.js.</p>
+      </section>
+
+      <nav class="menu-nav" aria-label="ניווט תפריט">
+        <button type="button" data-view-target="home">בית</button>
+        <button type="button" data-view-target="logs">יומן</button>
+        <button type="button" data-view-target="sync">Sync</button>
+      </nav>
+    </aside>
+
+    <main class="app-canvas">
+      <section class="view is-active" id="homeView" data-view="home" aria-labelledby="homeTitle">
+        <h1 class="sr-only" id="homeTitle">מסך מעקב הנקה</h1>
+
+        <section class="glass-panel next-feeding-card" aria-label="ההאכלה הבאה">
+          <div class="next-copy">
+            <span class="overline">ההאכלה הבאה</span>
+            <strong id="nextFeedText" class="next-time">--:--</strong>
+            <span id="nextFeedRelative" class="mint-line">בחרי צד כדי להתחיל</span>
+          </div>
+          <div class="last-side-pill glow-active">
+            <span>בפעם הבאה</span>
+            <strong id="nextSideText">אין נתונים</strong>
+          </div>
+        </section>
+
+        <section class="timer-stage" aria-label="טיימר הנקה">
+          <div id="activeTimer" class="main-timer" dir="ltr">00:00</div>
+          <p id="timerHint" class="timer-hint">מוכנה להתחיל</p>
+        </section>
+
+        <section class="side-toggle" aria-label="בחירת צד">
+          <button class="side-button side-right" type="button" data-side="right">
+            <span class="drop-icon" aria-hidden="true"></span>
+            <strong>ימין</strong>
+            <span id="rightSideStat">התחלה</span>
+          </button>
+          <button class="side-button side-left" type="button" data-side="left">
+            <span class="drop-icon" aria-hidden="true"></span>
+            <strong>שמאל</strong>
+            <span id="leftSideStat">התחלה</span>
+          </button>
+        </section>
+
+        <section class="active-controls" id="activeControls" hidden>
+          <button class="ghost-action" id="pauseButton" type="button">גרעפס / עצירה</button>
+          <button class="finish-action" id="stopButton" type="button">סיום הנקה</button>
+        </section>
+
+        <section class="quick-log-card" aria-labelledby="quickLogTitle">
+          <div class="card-heading">
+            <h2 id="quickLogTitle">רישום חיתול</h2>
+            <span id="lastDiaperText">עוד אין חיתולים</span>
+          </div>
+          <div class="quick-grid">
+            <button class="quick-button" type="button" data-diaper="pee">
+              <span class="quick-icon wet" aria-hidden="true">≈</span>
+              <strong>פיפי</strong>
+            </button>
+            <button class="quick-button" type="button" data-diaper="poop">
+              <span class="quick-icon dirty" aria-hidden="true">💩</span>
+              <strong>קקי</strong>
+            </button>
+            <button class="quick-button both" type="button" data-diaper="both">
+              <span class="quick-icon both-icon" aria-hidden="true">+</span>
+              <strong>גם וגם</strong>
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="logsView" data-view="logs" aria-labelledby="logsTitle">
+        <div class="page-title">
+          <h1 id="logsTitle">סיכום היום</h1>
+          <p>כל מה שנרשם היום, בלי רעש מיותר.</p>
+        </div>
+
+        <section class="summary-card">
+          <h2>חיתולים</h2>
+          <div class="goal-list">
+            <div class="goal">
+              <div class="goal-top">
+                <span>פיפי</span>
+                <strong id="peeGoal">0/5</strong>
+              </div>
+              <div class="goal-bar"><span id="peeBar"></span></div>
+            </div>
+            <div class="goal">
+              <div class="goal-top">
+                <span>קקי</span>
+                <strong id="poopGoal">0/3</strong>
+              </div>
+              <div class="goal-bar"><span id="poopBar"></span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="timeline-section">
+          <div class="card-heading">
+            <h2>ציר זמן</h2>
+            <button class="text-button" id="exportButton" type="button">ייצוא JSON</button>
+          </div>
+          <ol class="history-list" id="historyList"></ol>
+        </section>
+      </section>
+
+      <section class="view" id="syncView" data-view="sync" aria-labelledby="syncTitle">
+        <div class="partner-header">
+          <div>
+            <h1 id="syncTitle">דשבורד בן זוג</h1>
+            <div class="sync-line">
+              <span class="live-dot" id="statusDot" aria-hidden="true"></span>
+              <span id="syncStatus">נשמר במכשיר</span>
+            </div>
+          </div>
+          <span class="soft-small">סנכרון ענן יתווסף בשלב הבא</span>
+        </div>
+
+        <section class="live-card">
+          <div class="card-heading">
+            <h2>סטטוס חי</h2>
+            <span id="partnerStatus">מוכן להתחלה</span>
+          </div>
+          <strong class="partner-timer" id="partnerElapsed">--</strong>
+          <p id="lastFeedText">אין עדיין הנקה אחרונה</p>
+        </section>
+
+        <section class="action-card">
+          <div class="action-icon" aria-hidden="true">!</div>
+          <div>
+            <h2 id="partnerActionTitle">אין פעולה דחופה</h2>
+            <p id="partnerActionText">כשההאכלה תתקרב, כאן תופיע הצעה פרואקטיבית.</p>
+          </div>
+          <button class="finish-action full-width" type="button" data-view-target="home">חזרה למסך הראשי</button>
+        </section>
+
+        <section class="resource-card">
+          <span class="quick-icon wet" aria-hidden="true">≈</span>
+          <p>תזכורת שקטה: למלא בקבוק מים לאמא לפני ההאכלה הבאה.</p>
+        </section>
+      </section>
+    </main>
+
+    <div class="toast" id="undoToast" role="status" aria-live="polite" hidden>
+      <span id="undoText">נרשם</span>
+      <button type="button" id="undoButton">בטל</button>
+    </div>
+
+    <dialog class="sleepy-dialog" id="sleepyDialog">
+      <form method="dialog">
+        <h2>היא עדיין ערה?</h2>
+        <p>אולי כדאי ללטף לה את כפות הרגליים, להרים לגרעפס או להחליף חיתול קטן.</p>
+        <button class="finish-action full-width" value="ok">הבנתי</button>
+      </form>
+    </dialog>
+
+    <script src="config.js"></script>
+    <script src="app.js" defer></script>
+  </body>
+</html>
