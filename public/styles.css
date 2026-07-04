@@ -641,6 +641,23 @@ p {
   border-top: 1px solid rgba(69, 70, 83, 0.45);
 }
 
+.history-leading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(189, 194, 255, 0.13);
+  font-size: 1.35rem;
+}
+
 .history-main,
 .history-meta {
   display: grid;

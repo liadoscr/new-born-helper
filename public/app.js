@@ -695,12 +695,14 @@ function renderHistory() {
     type: "feeding",
     at: feeding.startedAt,
     title: `הנקה מצד ${sideLabel(feeding.side)}`,
+    icon: feeding.side === "right" ? "🤱" : "🍼",
     duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
   }));
   const diaperEvents = state.diapers.slice(0, 8).map((diaper) => ({
     type: "diaper",
     at: diaper.createdAt,
     title: diaperLabel(diaper.type),
+    icon: diaperIcon(diaper.type),
     duration: "",
   }));
   const events = [...feedingEvents, ...diaperEvents]
@@ -712,9 +714,12 @@ function renderHistory() {
         .map(
           (event) => `
             <li>
-              <div class="history-main">
-                <strong>${event.title}</strong>
-                <span>${formatFullDate(event.at)}</span>
+              <div class="history-leading">
+                <span class="history-icon" aria-hidden="true">${event.icon}</span>
+                <div class="history-main">
+                  <strong>${event.title}</strong>
+                  <span>${formatFullDate(event.at)}</span>
+                </div>
               </div>
               <div class="history-meta">
                 <span>שעה ${formatTime(event.at)}</span>
@@ -776,11 +781,52 @@ function clearUndo() {
 }
 
 function exportData() {
-  const data = encodeURIComponent(JSON.stringify({ user: currentUser, state }, null, 2));
+  const rows = buildExportRows();
+  const csv = toCsv(rows);
+  const data = encodeURIComponent(`\uFEFF${csv}`);
   const link = document.createElement("a");
-  link.href = `data:application/json;charset=utf-8,${data}`;
-  link.download = `feeding-log-${currentUser.id.replace(/[^a-z0-9_-]/gi, "-")}-${getTodayKey()}.json`;
+  link.href = `data:text/csv;charset=utf-8,${data}`;
+  link.download = `newborn-helper-${currentUser.id.replace(/[^a-z0-9_-]/gi, "-")}-${getTodayKey()}.csv`;
   link.click();
+}
+
+function buildExportRows() {
+  const feedingRows = state.feedings.map((feeding) => ({
+    _sortAt: feeding.startedAt,
+    "סוג פעולה": "הנקה",
+    "פירוט": `צד ${sideLabel(feeding.side)}`,
+    "תאריך": formatDateOnly(feeding.startedAt),
+    "שעת התחלה": formatTime(feeding.startedAt),
+    "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
+    "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
+    "נוצר על ידי": feeding.createdBy || "",
+  }));
+  const diaperRows = state.diapers.map((diaper) => ({
+    _sortAt: diaper.createdAt,
+    "סוג פעולה": "חיתול",
+    "פירוט": diaperLabel(diaper.type),
+    "תאריך": formatDateOnly(diaper.createdAt),
+    "שעת התחלה": formatTime(diaper.createdAt),
+    "שעת סיום": "",
+    "משך": "",
+    "נוצר על ידי": diaper.createdBy || "",
+  }));
+
+  return [...feedingRows, ...diaperRows].sort((a, b) => new Date(b._sortAt) - new Date(a._sortAt));
+}
+
+function toCsv(rows) {
+  const headers = ["סוג פעולה", "פירוט", "תאריך", "שעת התחלה", "שעת סיום", "משך", "נוצר על ידי"];
+  const lines = [headers.join(",")];
+  rows.forEach((row) => {
+    lines.push(headers.map((header) => csvEscape(row[header])).join(","));
+  });
+  return lines.join("\r\n");
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 async function installApp() {
@@ -798,6 +844,12 @@ function diaperLabel(type) {
   if (type === "pee") return "פיפי";
   if (type === "poop") return "קקי";
   return "גם וגם";
+}
+
+function diaperIcon(type) {
+  if (type === "pee") return "💧";
+  if (type === "poop") return "💩";
+  return "🚼";
 }
 
 function relativeDueText(date) {
@@ -851,6 +903,14 @@ function formatTime(value) {
 function formatFullDate(value) {
   return new Intl.DateTimeFormat("he-IL", {
     weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatDateOnly(value) {
+  return new Intl.DateTimeFormat("he-IL", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
