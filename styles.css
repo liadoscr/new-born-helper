@@ -219,6 +219,9 @@ p {
 }
 
 .menu-nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   min-height: 58px;
   border-radius: 16px;
   background: transparent;
@@ -226,6 +229,17 @@ p {
   font-weight: 900;
   text-align: right;
   padding: 0 16px;
+}
+
+.menu-nav button span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(189, 194, 255, 0.12);
+  color: var(--primary);
+  font-size: 1.18rem;
 }
 
 .menu-nav button:hover,
@@ -239,6 +253,11 @@ p {
   background: var(--primary-container);
   color: var(--on-primary);
   box-shadow: 0 0 18px rgba(129, 140, 248, 0.22);
+}
+
+.menu-nav button.is-active span {
+  background: rgba(19, 30, 140, 0.16);
+  color: var(--on-primary);
 }
 
 .app-canvas {
