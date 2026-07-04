@@ -22,34 +22,11 @@
       <div class="menu-header">
         <div>
           <span class="overline">NewBorn Helper</span>
-          <strong id="menuUserName">מצב אורח</strong>
-          <small id="menuUserEmail">הנתונים נשמרים במכשיר הזה</small>
+          <strong>ניווט</strong>
+          <small>כל המסכים במקום אחד</small>
         </div>
         <button class="top-icon compact" id="closeMenuButton" type="button" aria-label="סגירת תפריט">×</button>
       </div>
-
-      <section class="auth-card" aria-labelledby="authTitle">
-        <div>
-          <h2 id="authTitle">חשבון</h2>
-          <p id="authStatus">לא מחובר לגוגל</p>
-        </div>
-        <button class="google-action" id="googleSignInButton" type="button">
-          <span aria-hidden="true">G</span>
-          התחברות עם Google
-        </button>
-        <button class="ghost-action full-width" id="signOutButton" type="button" hidden>התנתקות</button>
-        <button class="danger-action full-width" id="resetDataButton" type="button">איפוס נתונים</button>
-        <p class="config-hint" id="googleConfigHint">כדי להפעיל התחברות אמיתית, יש להגדיר Google Client ID בקובץ config.js.</p>
-      </section>
-
-      <section class="auth-card" aria-labelledby="notificationsTitle">
-        <div>
-          <h2 id="notificationsTitle">התראות</h2>
-          <p id="notificationStatus">התראות לא הופעלו</p>
-        </div>
-        <button class="finish-action full-width" id="enableNotificationsButton" type="button">אפשר התראות</button>
-        <p class="config-hint">ב-iOS יש להוסיף את האתר למסך הבית ולאשר התראות מתוך האפליקציה.</p>
-      </section>
 
       <nav class="menu-nav" aria-label="ניווט תפריט">
         <button type="button" data-view-target="home">
@@ -63,6 +40,10 @@
         <button type="button" data-view-target="sync">
           <span aria-hidden="true">◎</span>
           Sync
+        </button>
+        <button type="button" data-view-target="settings">
+          <span aria-hidden="true">⚙</span>
+          הגדרות
         </button>
       </nav>
     </aside>
@@ -196,6 +177,68 @@
         <section class="resource-card">
           <span class="quick-icon wet" aria-hidden="true">≈</span>
           <p>תזכורת שקטה: למלא בקבוק מים לאמא לפני ההאכלה הבאה.</p>
+        </section>
+      </section>
+
+      <section class="view" id="settingsView" data-view="settings" aria-labelledby="settingsTitle">
+        <div class="page-title">
+          <h1 id="settingsTitle">הגדרות</h1>
+          <p>חשבון, מצב אורח, התראות ואיפוס נתונים.</p>
+        </div>
+
+        <section class="settings-grid" aria-label="הגדרות אפליקציה">
+          <article class="auth-card settings-card" aria-labelledby="authTitle">
+            <div class="settings-card-head">
+              <span class="settings-icon" aria-hidden="true">G</span>
+              <div>
+                <h2 id="authTitle">חשבון Google</h2>
+                <p id="authStatus">לא מחובר לגוגל</p>
+              </div>
+            </div>
+            <div class="account-strip">
+              <strong id="menuUserName">מצב אורח</strong>
+              <span id="menuUserEmail">הנתונים נשמרים במכשיר הזה</span>
+            </div>
+            <button class="google-action" id="googleSignInButton" type="button">
+              <span aria-hidden="true">G</span>
+              התחברות עם Google
+            </button>
+            <button class="ghost-action full-width" id="signOutButton" type="button" hidden>התנתקות</button>
+            <p class="config-hint" id="googleConfigHint">כדי להפעיל התחברות אמיתית, יש להגדיר Google Client ID בקובץ config.js.</p>
+          </article>
+
+          <article class="auth-card settings-card" aria-labelledby="guestTitle">
+            <div class="settings-card-head">
+              <span class="settings-icon" aria-hidden="true">⌂</span>
+              <div>
+                <h2 id="guestTitle">מצב אורח</h2>
+                <p>אפשר להשתמש באפליקציה גם בלי התחברות. הנתונים יישמרו רק במכשיר הזה.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="auth-card settings-card" aria-labelledby="notificationsTitle">
+            <div class="settings-card-head">
+              <span class="settings-icon" aria-hidden="true">◔</span>
+              <div>
+                <h2 id="notificationsTitle">התראות</h2>
+                <p id="notificationStatus">התראות לא הופעלו</p>
+              </div>
+            </div>
+            <button class="finish-action full-width" id="enableNotificationsButton" type="button">אפשר התראות</button>
+            <p class="config-hint">ב-iOS יש להוסיף את האתר למסך הבית ולאשר התראות מתוך האפליקציה.</p>
+          </article>
+
+          <article class="auth-card settings-card danger-settings" aria-labelledby="dataTitle">
+            <div class="settings-card-head">
+              <span class="settings-icon" aria-hidden="true">!</span>
+              <div>
+                <h2 id="dataTitle">נתונים</h2>
+                <p>איפוס מוחק את ההנקות והחיתולים של המשתמש הנוכחי מהמכשיר.</p>
+              </div>
+            </div>
+            <button class="danger-action full-width" id="resetDataButton" type="button">איפוס נתונים</button>
+          </article>
         </section>
       </section>
     </main>

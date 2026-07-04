@@ -180,6 +180,54 @@ p {
   font-size: 1.35rem;
 }
 
+.settings-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-card {
+  border-radius: 18px;
+}
+
+.settings-card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-card-head div {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(189, 194, 255, 0.12);
+  color: var(--primary);
+  font-weight: 900;
+}
+
+.account-strip {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(18, 19, 25, 0.48);
+}
+
+.account-strip span {
+  color: var(--muted);
+}
+
+.danger-settings {
+  border-color: rgba(255, 180, 171, 0.22);
+}
+
 .google-action {
   display: flex;
   align-items: center;
