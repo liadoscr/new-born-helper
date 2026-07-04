@@ -439,6 +439,7 @@ p {
 
 .ghost-action,
 .finish-action,
+.danger-action,
 .text-button {
   min-height: 64px;
   border-radius: 999px;
@@ -456,6 +457,12 @@ p {
   background: var(--primary);
   color: var(--on-primary);
   box-shadow: 0 8px 22px rgba(189, 194, 255, 0.18);
+}
+
+.danger-action {
+  background: rgba(255, 180, 171, 0.16);
+  color: var(--error);
+  border: 1px solid rgba(255, 180, 171, 0.34);
 }
 
 .quick-log-card,
@@ -712,6 +719,11 @@ p {
   box-shadow: var(--shadow);
 }
 
+.toast[hidden],
+.toast button[hidden] {
+  display: none !important;
+}
+
 .toast button {
   min-height: 44px;
   padding: 0 18px;
@@ -738,6 +750,12 @@ p {
 .sleepy-dialog form {
   display: grid;
   gap: 16px;
+}
+
+.dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .sleepy-dialog p {
@@ -793,7 +811,8 @@ p {
   }
 
   .quick-grid,
-  .active-controls {
+  .active-controls,
+  .dialog-actions {
     grid-template-columns: 1fr;
   }
 

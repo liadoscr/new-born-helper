@@ -64,6 +64,8 @@ const els = {
   poopBar: document.querySelector("#poopBar"),
   poopGoal: document.querySelector("#poopGoal"),
   rightSideStat: document.querySelector("#rightSideStat"),
+  resetDataButton: document.querySelector("#resetDataButton"),
+  resetDialog: document.querySelector("#resetDialog"),
   sideButtons: document.querySelectorAll("[data-side]"),
   signOutButton: document.querySelector("#signOutButton"),
   sleepyDialog: document.querySelector("#sleepyDialog"),
@@ -108,6 +110,10 @@ function init() {
   els.installButton.addEventListener("click", installApp);
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
+  els.resetDataButton.addEventListener("click", openResetDialog);
+  els.resetDialog.addEventListener("close", () => {
+    if (els.resetDialog.returnValue === "confirm") resetCurrentUserData();
+  });
 
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
@@ -233,7 +239,7 @@ function loadGoogleScript() {
 
 function signInWithGoogle() {
   if (!googleReady || !window.google?.accounts?.id) {
-    showUndo("Google Login עדיין לא מוגדר", () => {});
+    showToast("Google Login עדיין לא מוגדר");
     return;
   }
 
@@ -256,7 +262,7 @@ function handleGoogleCredential(response) {
   };
   switchUser(user);
   closeMenu();
-  showUndo(`מחובר כ-${user.name}`, () => {});
+  showToast(`מחובר כ-${user.name}`);
 }
 
 function parseJwt(token) {
@@ -276,7 +282,30 @@ function signOut() {
     window.google.accounts.id.disableAutoSelect();
   }
   switchUser(GUEST_USER);
-  showUndo("התנתקת. עברת למצב אורח", () => {});
+  showToast("התנתקת. עברת למצב אורח");
+}
+
+function openResetDialog() {
+  closeMenu();
+  if (typeof els.resetDialog.showModal === "function") {
+    els.resetDialog.showModal();
+    return;
+  }
+
+  if (confirm("לאפס את כל הנתונים של המשתמש הנוכחי?")) {
+    resetCurrentUserData();
+  }
+}
+
+function resetCurrentUserData() {
+  localStorage.removeItem(storageKeyFor(currentUser));
+  if (currentUser.provider === "guest") {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
+  state = clone(defaultState);
+  clearUndo();
+  render();
+  showToast("הנתונים אופסו");
 }
 
 function renderAuth() {
@@ -591,9 +620,14 @@ function getActiveFeeding() {
 function showUndo(message, action) {
   undo = action;
   els.undoText.textContent = message;
+  els.undoButton.hidden = !action;
   els.undoToast.hidden = false;
   clearTimeout(undoTimer);
   undoTimer = setTimeout(clearUndo, 7000);
+}
+
+function showToast(message) {
+  showUndo(message, null);
 }
 
 function runUndo() {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "night-feeding-v8";
+const CACHE_NAME = "night-feeding-v9";
 const APP_SHELL = [
   "./",
   "./index.html",

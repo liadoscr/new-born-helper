@@ -38,6 +38,7 @@
           התחברות עם Google
         </button>
         <button class="ghost-action full-width" id="signOutButton" type="button" hidden>התנתקות</button>
+        <button class="danger-action full-width" id="resetDataButton" type="button">איפוס נתונים</button>
         <p class="config-hint" id="googleConfigHint">כדי להפעיל התחברות אמיתית, יש להגדיר Google Client ID בקובץ config.js.</p>
       </section>
 
@@ -191,6 +192,17 @@
         <h2>היא עדיין ערה?</h2>
         <p>אולי כדאי ללטף לה את כפות הרגליים, להרים לגרעפס או להחליף חיתול קטן.</p>
         <button class="finish-action full-width" value="ok">הבנתי</button>
+      </form>
+    </dialog>
+
+    <dialog class="sleepy-dialog" id="resetDialog">
+      <form method="dialog">
+        <h2>לאפס את הנתונים?</h2>
+        <p>הפעולה תמחק את ההנקות והחיתולים של המשתמש הנוכחי מהמכשיר הזה. אי אפשר לבטל אחרי האישור.</p>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="danger-action full-width" id="confirmResetButton" value="confirm">איפוס</button>
+        </div>
       </form>
     </dialog>
 
