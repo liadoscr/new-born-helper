@@ -1,6 +1,6 @@
 {
-  "name": "Lullaby Log - מעקב הנקה",
-  "short_name": "Lullaby Log",
+  "name": "NewBorn Helper",
+  "short_name": "NewBorn",
   "description": "טיימר הנקה, חיתולים ודשבורד בן זוג במצב לילה.",
   "start_url": ".",
   "scope": ".",

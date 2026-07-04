@@ -19,7 +19,7 @@ if (Test-Path $bundledPython) {
 }
 
 Set-Location -LiteralPath $projectRoot
-Write-Host "Serving breastfeeding app at http://127.0.0.1:5173"
+Write-Host "Serving NewBorn Helper at http://127.0.0.1:5173"
 if ($nodeExe) {
   & $nodeExe .\serve.mjs
 } elseif ($pythonExe) {

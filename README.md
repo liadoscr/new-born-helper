@@ -1,4 +1,4 @@
-# Lullaby Log - אפליקציית עזר להנקה
+# NewBorn Helper - אפליקציית עזר להנקה
 
 MVP קליינטי ו-Offline-first למעקב הנקה, חיתולים ודשבורד בן זוג. האפליקציה בנויה כ-PWA סטטי ב-HTML/CSS/JS, ולכן אפשר להעלות אותה כמעט לכל Static Hosting.
 

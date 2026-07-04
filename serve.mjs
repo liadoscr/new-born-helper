@@ -50,5 +50,5 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Serving Lullaby Log at http://${host}:${port}`);
+  console.log(`Serving NewBorn Helper at http://${host}:${port}`);
 });
