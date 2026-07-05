@@ -231,6 +231,8 @@ p {
 .field-row {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   font-weight: 800;
 }
@@ -252,6 +254,8 @@ p {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 60px;
   border: 1px solid rgba(198, 197, 213, 0.2);
   border-radius: 18px;
@@ -333,6 +337,8 @@ p {
 .choice-group {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 16px;
   border: 1px solid rgba(198, 197, 213, 0.18);
@@ -351,6 +357,7 @@ p {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   min-height: 50px;
   padding: 0 12px;
   border-radius: 14px;
@@ -370,6 +377,8 @@ p {
 .entry-fields {
   display: grid;
   gap: 16px;
+  min-width: 0;
+  max-width: 100%;
   padding: 16px;
   border: 1px solid rgba(198, 197, 213, 0.12);
   border-radius: 20px;
@@ -1033,6 +1042,7 @@ p {
 
 .sleepy-dialog {
   width: min(460px, calc(100% - 24px));
+  max-width: calc(100dvw - 24px);
   max-height: min(760px, calc(100dvh - 28px));
   overflow: auto;
   border: 1px solid rgba(198, 197, 213, 0.14);
@@ -1051,6 +1061,7 @@ p {
 .sleepy-dialog form {
   display: grid;
   gap: 18px;
+  min-width: 0;
   padding: 22px;
 }
 
@@ -1063,6 +1074,7 @@ p {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  min-width: 0;
   position: sticky;
   bottom: -22px;
   margin: 4px -22px -22px;
@@ -1098,6 +1110,48 @@ p {
     padding-inline: 16px;
   }
 
+  .sleepy-dialog {
+    width: calc(100dvw - 18px);
+    max-width: calc(100dvw - 18px);
+    border-radius: 20px;
+  }
+
+  .sleepy-dialog form {
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .sleepy-dialog h2 {
+    font-size: 1.35rem;
+  }
+
+  .field-row input,
+  .field-row select {
+    min-height: 56px;
+    border-radius: 16px;
+    padding-inline: 12px;
+    font-size: 1rem;
+  }
+
+  .field-row select {
+    padding-inline-end: 38px;
+    background-position:
+      left 18px center,
+      left 10px center,
+      center;
+  }
+
+  .milk-amount-row input {
+    min-height: 68px;
+    font-size: clamp(1.8rem, 9vw, 2.4rem);
+  }
+
+  .entry-fields,
+  .choice-group {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
   .view.is-active {
     gap: 34px;
   }
@@ -1126,6 +1180,12 @@ p {
   .active-controls,
   .dialog-actions {
     grid-template-columns: 1fr;
+  }
+
+  .dialog-actions {
+    bottom: -16px;
+    margin: 4px -16px -16px;
+    padding: 12px 16px 16px;
   }
 
   .card-heading {
