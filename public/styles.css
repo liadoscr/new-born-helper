@@ -235,6 +235,13 @@ p {
   font-weight: 800;
 }
 
+.field-row[hidden],
+.choice-group[hidden],
+.inline-check[hidden],
+.entry-fields[hidden] {
+  display: none !important;
+}
+
 .field-row span {
   padding-inline: 4px;
   font-size: 0.95rem;
@@ -376,10 +383,6 @@ p {
   border: 1px solid rgba(198, 197, 213, 0.12);
   border-radius: 20px;
   background: rgba(18, 19, 25, 0.26);
-}
-
-.entry-fields[hidden] {
-  display: none;
 }
 
 .field-section-title {
