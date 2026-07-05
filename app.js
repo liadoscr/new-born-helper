@@ -40,6 +40,7 @@ let deferredInstallPrompt = null;
 let googleReady = false;
 let nextFeedingNotificationTimer = null;
 let scheduledNotificationAt = "";
+let pendingBottlePumpId = "";
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -109,6 +110,9 @@ const els = {
   poopBar: document.querySelector("#poopBar"),
   poopGoal: document.querySelector("#poopGoal"),
   pumpButton: document.querySelector("#pumpButton"),
+  pumpRuleWarning: document.querySelector("#pumpRuleWarning"),
+  pumpSelectDialog: document.querySelector("#pumpSelectDialog"),
+  pumpSelectInput: document.querySelector("#pumpSelectInput"),
   pumpStorageGroup: document.querySelector("#pumpStorageGroup"),
   rightSideStat: document.querySelector("#rightSideStat"),
   resetDataButton: document.querySelector("#resetDataButton"),
@@ -161,6 +165,7 @@ function init() {
   els.addManualButton.addEventListener("click", () => openEntryDialog());
   els.installButton.addEventListener("click", installApp);
   els.pumpButton.addEventListener("click", () => openMilkDialog("pump"));
+  els.pumpSelectInput.addEventListener("change", renderPumpSelectionWarning);
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
   els.resetDataButton.addEventListener("click", openResetDialog);
@@ -174,6 +179,9 @@ function init() {
   });
   els.milkDialog.addEventListener("close", () => {
     if (els.milkDialog.returnValue === "save") saveMilkDialog();
+  });
+  els.pumpSelectDialog.addEventListener("close", () => {
+    if (els.pumpSelectDialog.returnValue === "start") startBottleFromSelectedPump();
   });
   els.entryDialog.addEventListener("close", () => {
     if (els.entryDialog.returnValue === "save") saveEntryDialog();
@@ -520,6 +528,10 @@ function closeMenu() {
 function handleSideTap(side) {
   const active = getActiveFeeding();
   if (!active) {
+    if (side === "bottle") {
+      openPumpSelectDialog();
+      return;
+    }
     startFeeding(side);
     return;
   }
@@ -529,10 +541,11 @@ function handleSideTap(side) {
   }
 }
 
-function startFeeding(side) {
+function startFeeding(side, options = {}) {
   const feeding = {
     id: crypto.randomUUID(),
     side,
+    pumpId: options.pumpId || "",
     startedAt: new Date().toISOString(),
     pauses: [],
     createdBy: currentUser.id,
@@ -547,6 +560,41 @@ function startFeeding(side) {
   });
   vibrate(20);
   render();
+}
+
+function openPumpSelectDialog() {
+  const pumps = getPumpOptions();
+  if (!pumps.length) {
+    showToast("צריך לרשום שאיבה לפני שאפשר להתחיל בקבוק");
+    showView("logs");
+    return;
+  }
+
+  pendingBottlePumpId = "";
+  els.pumpSelectDialog.returnValue = "";
+  els.pumpSelectInput.innerHTML = pumps
+    .map((pump) => `<option value="${pump.id}">${pumpOptionLabel(pump)}</option>`)
+    .join("");
+  els.pumpSelectInput.value = pumps[0].id;
+  renderPumpSelectionWarning();
+
+  if (typeof els.pumpSelectDialog.showModal === "function") {
+    els.pumpSelectDialog.showModal();
+  }
+}
+
+function startBottleFromSelectedPump() {
+  const pumpId = els.pumpSelectInput.value;
+  if (!pumpId) return;
+  pendingBottlePumpId = pumpId;
+  startFeeding("bottle", { pumpId });
+}
+
+function renderPumpSelectionWarning() {
+  const pump = findEvent("pump", els.pumpSelectInput.value);
+  const warnings = evaluatePumpWarnings(pump);
+  els.pumpRuleWarning.hidden = warnings.length === 0;
+  els.pumpRuleWarning.innerHTML = warnings.map((warning) => `<p>${warning}</p>`).join("");
 }
 
 function stopFeeding() {
@@ -656,6 +704,7 @@ function saveMilkDialog() {
     if (feeding) {
       feeding.amountValue = amount;
       feeding.amountUnit = unit;
+      if (!feeding.pumpId && pendingBottlePumpId) feeding.pumpId = pendingBottlePumpId;
       delete feeding.amountMl;
       saveState();
       render();
@@ -668,6 +717,7 @@ function saveMilkDialog() {
     const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
     const pump = {
       id: crypto.randomUUID(),
+      pumpCode: createPumpCode(),
       amountValue: amount,
       amountUnit: unit,
       storage,
@@ -940,7 +990,7 @@ function renderHistory() {
       type: "pump",
       id: pump.id,
       at: pump.createdAt,
-      title: `שאיבה${formatAmount(pump) ? ` ${formatAmount(pump)}` : ""}`,
+      title: `שאיבה ${pumpCode(pump)}${formatAmount(pump) ? ` · ${formatAmount(pump)}` : ""}`,
       icon: "⇢",
       duration: pump.storage === "fridge" ? "במקרר" : expired ? "פג תוקף" : `בתוקף עד ${formatTime(pump.expiresAt)}`,
       expired,
@@ -1085,6 +1135,7 @@ function savePumpEntry(id, createdAt) {
   const storage = els.entryStorageInput.value;
   upsertById(state.pumps, {
     id: id || crypto.randomUUID(),
+    pumpCode: findEvent("pump", id)?.pumpCode || createPumpCode(),
     amountValue: normalizeAmount(els.entryAmountInput.value),
     amountUnit: els.entryAmountUnitInput.value || "ml",
     storage,
@@ -1155,7 +1206,11 @@ function nextStartSide(feeding) {
 }
 
 function feedingSummary(feeding) {
-  if (isBottleFeeding(feeding)) return `בקבוק${formatAmount(feeding) ? ` ${formatAmount(feeding)}` : ""}`;
+  if (isBottleFeeding(feeding)) {
+    const pump = findEvent("pump", feeding.pumpId);
+    const pumpText = pump ? ` · ${pumpCode(pump)}` : "";
+    return `בקבוק${formatAmount(feeding) ? ` ${formatAmount(feeding)}` : ""}${pumpText}`;
+  }
   const main = sideLabel(feeding.side);
   return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)}` : main;
 }
@@ -1177,6 +1232,37 @@ function getLatestBreastFeeding() {
 
 function isPumpExpired(pump) {
   return Boolean(pump.expiresAt && new Date(pump.expiresAt).getTime() <= Date.now());
+}
+
+function getPumpOptions() {
+  return [...state.pumps].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function createPumpCode() {
+  return `S${new Date().toISOString().slice(5, 10).replace("-", "")}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+}
+
+function pumpCode(pump) {
+  if (!pump) return "";
+  if (pump.pumpCode) return pump.pumpCode;
+  return `S-${String(pump.id || "").slice(0, 5).toUpperCase()}`;
+}
+
+function pumpOptionLabel(pump) {
+  const parts = [pumpCode(pump), formatDateOnly(pump.createdAt), formatTime(pump.createdAt)];
+  const amount = formatAmount(pump);
+  if (amount) parts.push(amount);
+  parts.push(pump.storage === "fridge" ? "במקרר" : "בחוץ");
+  return parts.join(" · ");
+}
+
+function evaluatePumpWarnings(pump) {
+  if (!pump) return ["לא נבחרה שאיבה."];
+  const warnings = [];
+  if (pump.storage === "room" && isPumpExpired(pump)) {
+    warnings.push("אזהרה: השאיבה הזו סומנה כחלב שהיה בחוץ ועברו יותר מ-4 שעות.");
+  }
+  return warnings;
 }
 
 function normalizeAmount(value) {
@@ -1245,6 +1331,7 @@ function buildExportRows() {
     _sortAt: feeding.startedAt,
     "סוג פעולה": isBottleFeeding(feeding) ? "בקבוק" : "הנקה",
     "פירוט": feedingSummary(feeding),
+    "שאיבה מקושרת": isBottleFeeding(feeding) && feeding.pumpId ? pumpCode(findEvent("pump", feeding.pumpId)) : "",
     "תאריך": formatDateOnly(feeding.startedAt),
     "שעת התחלה": formatTime(feeding.startedAt),
     "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
@@ -1257,6 +1344,7 @@ function buildExportRows() {
     _sortAt: diaper.createdAt,
     "סוג פעולה": "חיתול",
     "פירוט": diaperLabel(diaper.type),
+    "שאיבה מקושרת": "",
     "תאריך": formatDateOnly(diaper.createdAt),
     "שעת התחלה": formatTime(diaper.createdAt),
     "שעת סיום": "",
@@ -1269,6 +1357,7 @@ function buildExportRows() {
     _sortAt: bottle.createdAt,
     "סוג פעולה": "בקבוק",
     "פירוט": "בקבוק שאוב",
+    "שאיבה מקושרת": bottle.pumpId ? pumpCode(findEvent("pump", bottle.pumpId)) : "",
     "תאריך": formatDateOnly(bottle.createdAt),
     "שעת התחלה": formatTime(bottle.createdAt),
     "שעת סיום": "",
@@ -1280,7 +1369,8 @@ function buildExportRows() {
   const pumpRows = state.pumps.map((pump) => ({
     _sortAt: pump.createdAt,
     "סוג פעולה": "שאיבה",
-    "פירוט": pump.storage === "fridge" ? "נשמר במקרר" : "נשמר בחוץ",
+    "פירוט": `${pumpCode(pump)} · ${pump.storage === "fridge" ? "נשמר במקרר" : "נשמר בחוץ"}`,
+    "שאיבה מקושרת": pumpCode(pump),
     "תאריך": formatDateOnly(pump.createdAt),
     "שעת התחלה": formatTime(pump.createdAt),
     "שעת סיום": "",
@@ -1294,7 +1384,7 @@ function buildExportRows() {
 }
 
 function toCsv(rows) {
-  const headers = ["סוג פעולה", "פירוט", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "נוצר על ידי"];
+  const headers = ["סוג פעולה", "פירוט", "שאיבה מקושרת", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "נוצר על ידי"];
   const lines = [headers.join(",")];
   rows.forEach((row) => {
     lines.push(headers.map((header) => csvEscape(row[header])).join(","));

@@ -334,6 +334,22 @@
       </form>
     </dialog>
 
+    <dialog class="sleepy-dialog" id="pumpSelectDialog">
+      <form method="dialog">
+        <h2>בחירת שאיבה לבקבוק</h2>
+        <p>בחרי מאיזו שאיבה הבקבוק הזה מגיע.</p>
+        <label class="field-row">
+          <span>שאיבה</span>
+          <select id="pumpSelectInput"></select>
+        </label>
+        <div class="warning-panel" id="pumpRuleWarning" hidden></div>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="finish-action full-width" value="start">התחלת בקבוק</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="sleepy-dialog" id="entryDialog">
       <form method="dialog">
         <input id="entryIdInput" type="hidden" />
