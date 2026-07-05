@@ -83,13 +83,14 @@
         </section>
 
         <section class="active-controls" id="activeControls" hidden>
+          <button class="ghost-action" id="dessertButton" type="button">קינוח</button>
           <button class="ghost-action" id="pauseButton" type="button">גרעפס / עצירה</button>
           <button class="finish-action" id="stopButton" type="button">סיום הנקה</button>
         </section>
 
         <section class="quick-log-card" aria-labelledby="quickLogTitle">
           <div class="card-heading">
-            <h2 id="quickLogTitle">רישום חיתול</h2>
+            <h2 id="quickLogTitle">רישום מהיר</h2>
             <span id="lastDiaperText">עוד אין חיתולים</span>
           </div>
           <div class="quick-grid">
@@ -104,6 +105,14 @@
             <button class="quick-button both" type="button" data-diaper="both">
               <span class="quick-icon both-icon" aria-hidden="true">+</span>
               <strong>גם וגם</strong>
+            </button>
+            <button class="quick-button" id="bottleButton" type="button">
+              <span class="quick-icon bottle" aria-hidden="true">🍼</span>
+              <strong>בקבוק</strong>
+            </button>
+            <button class="quick-button" id="pumpButton" type="button">
+              <span class="quick-icon pump" aria-hidden="true">⇢</span>
+              <strong>שאיבה</strong>
             </button>
           </div>
         </section>
@@ -138,7 +147,10 @@
         <section class="timeline-section">
           <div class="card-heading">
             <h2>ציר זמן</h2>
-            <button class="text-button" id="exportButton" type="button">ייצוא Excel</button>
+            <div class="heading-actions">
+              <button class="text-button" id="addManualButton" type="button">הוספה בדיעבד</button>
+              <button class="text-button" id="exportButton" type="button">ייצוא Excel</button>
+            </div>
           </div>
           <ol class="history-list" id="historyList"></ol>
         </section>
@@ -229,6 +241,22 @@
             <p class="config-hint">ב-iOS יש להוסיף את האתר למסך הבית ולאשר התראות מתוך האפליקציה.</p>
           </article>
 
+          <article class="auth-card settings-card" aria-labelledby="pairingTitle">
+            <div class="settings-card-head">
+              <span class="settings-icon" aria-hidden="true">◎</span>
+              <div>
+                <h2 id="pairingTitle">סנכרון זוגי</h2>
+                <p id="syncConfigStatus">נשמר מקומית עד חיבור שירות ענן.</p>
+              </div>
+            </div>
+            <label class="field-row">
+              <span>אימיילים מורשים</span>
+              <input id="partnerEmailsInput" type="email" multiple placeholder="email@example.com, partner@example.com" />
+            </label>
+            <button class="finish-action full-width" id="savePartnerEmailsButton" type="button">שמירת אימיילים</button>
+            <p class="config-hint">כדי שהנתונים באמת יסתנכרנו בין מכשירים צריך להגדיר Firebase או Supabase בקובץ config.js.</p>
+          </article>
+
           <article class="auth-card settings-card danger-settings" aria-labelledby="dataTitle">
             <div class="settings-card-head">
               <span class="settings-icon" aria-hidden="true">!</span>
@@ -263,6 +291,102 @@
         <div class="dialog-actions">
           <button class="ghost-action full-width" value="cancel">ביטול</button>
           <button class="danger-action full-width" id="confirmResetButton" value="confirm">איפוס</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="sleepy-dialog" id="milkDialog">
+      <form method="dialog">
+        <input id="milkMode" type="hidden" />
+        <h2 id="milkDialogTitle">רישום חלב</h2>
+        <label class="field-row">
+          <span>כמות במ"ל</span>
+          <input id="milkAmountInput" type="number" min="0" step="5" inputmode="numeric" placeholder="לדוגמה 60" />
+        </label>
+        <label class="field-row">
+          <span>תאריך</span>
+          <input id="milkDateInput" type="date" />
+        </label>
+        <label class="field-row">
+          <span>שעה</span>
+          <input id="milkTimeInput" type="time" />
+        </label>
+        <fieldset class="choice-group" id="pumpStorageGroup">
+          <legend>איפה החלב נמצא?</legend>
+          <label><input type="radio" name="pumpStorage" value="room" checked /> בחוץ - 4 שעות</label>
+          <label><input type="radio" name="pumpStorage" value="fridge" /> במקרר</label>
+        </fieldset>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="finish-action full-width" value="save">שמירה</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="sleepy-dialog" id="entryDialog">
+      <form method="dialog">
+        <input id="entryIdInput" type="hidden" />
+        <h2 id="entryDialogTitle">הוספה בדיעבד</h2>
+        <label class="field-row">
+          <span>סוג פעולה</span>
+          <select id="entryTypeInput">
+            <option value="feeding">הנקה</option>
+            <option value="diaper">חיתול</option>
+            <option value="bottle">בקבוק</option>
+            <option value="pump">שאיבה</option>
+          </select>
+        </label>
+        <label class="field-row">
+          <span>תאריך</span>
+          <input id="entryDateInput" type="date" />
+        </label>
+        <label class="field-row">
+          <span>שעת התחלה</span>
+          <input id="entryStartTimeInput" type="time" />
+        </label>
+        <div class="entry-fields" data-entry-fields="feeding">
+          <label class="field-row">
+            <span>צד התחלה</span>
+            <select id="entrySideInput">
+              <option value="right">ימין</option>
+              <option value="left">שמאל</option>
+            </select>
+          </label>
+          <label class="field-row">
+            <span>שעת סיום</span>
+            <input id="entryEndTimeInput" type="time" />
+          </label>
+          <label class="inline-check">
+            <input id="entryDessertInput" type="checkbox" />
+            היה קינוח מהצד השני
+          </label>
+        </div>
+        <div class="entry-fields" data-entry-fields="diaper">
+          <label class="field-row">
+            <span>סוג חיתול</span>
+            <select id="entryDiaperInput">
+              <option value="pee">פיפי</option>
+              <option value="poop">קקי</option>
+              <option value="both">גם וגם</option>
+            </select>
+          </label>
+        </div>
+        <div class="entry-fields" data-entry-fields="milk">
+          <label class="field-row">
+            <span>כמות במ"ל</span>
+            <input id="entryAmountInput" type="number" min="0" step="5" inputmode="numeric" />
+          </label>
+          <label class="field-row" id="entryStorageRow">
+            <span>אחסון</span>
+            <select id="entryStorageInput">
+              <option value="room">בחוץ - 4 שעות</option>
+              <option value="fridge">במקרר</option>
+            </select>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="finish-action full-width" value="save">שמירה</button>
         </div>
       </form>
     </dialog>

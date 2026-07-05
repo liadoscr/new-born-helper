@@ -228,6 +228,58 @@ p {
   border-color: rgba(255, 180, 171, 0.22);
 }
 
+.field-row {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.field-row input,
+.field-row select {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid rgba(198, 197, 213, 0.18);
+  border-radius: 16px;
+  background: rgba(18, 19, 25, 0.72);
+  color: var(--text);
+  font: inherit;
+  padding: 0 14px;
+}
+
+.choice-group {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid rgba(198, 197, 213, 0.16);
+  border-radius: 16px;
+}
+
+.choice-group legend {
+  padding: 0 8px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.choice-group label,
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.entry-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.entry-fields[hidden] {
+  display: none;
+}
+
 .google-action {
   display: flex;
   align-items: center;
@@ -505,7 +557,7 @@ p {
 
 .active-controls {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
 }
 
@@ -558,6 +610,18 @@ p {
   gap: 16px;
 }
 
+.heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.heading-actions .text-button {
+  min-height: 46px;
+  padding: 0 16px;
+}
+
 .card-heading h2,
 .summary-card h2,
 .timeline-section h2,
@@ -595,7 +659,7 @@ p {
 }
 
 .quick-button.both {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .quick-icon {
@@ -621,6 +685,16 @@ p {
 
 .quick-icon.both-icon {
   background: rgba(189, 194, 255, 0.16);
+  color: var(--primary);
+}
+
+.quick-icon.bottle {
+  background: rgba(255, 175, 211, 0.16);
+  color: var(--tertiary);
+}
+
+.quick-icon.pump {
+  background: rgba(129, 140, 248, 0.18);
   color: var(--primary);
 }
 
@@ -689,6 +763,11 @@ p {
   border-top: 1px solid rgba(69, 70, 83, 0.45);
 }
 
+.history-list li.is-expired .history-icon {
+  background: rgba(255, 180, 171, 0.16);
+  color: var(--error);
+}
+
 .history-leading {
   display: flex;
   align-items: center;
@@ -720,6 +799,12 @@ p {
   justify-items: end;
   text-align: left;
   font-size: 0.95rem;
+}
+
+.history-edit {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 0.9rem;
 }
 
 .sync-line {
@@ -903,6 +988,20 @@ p {
   .active-controls,
   .dialog-actions {
     grid-template-columns: 1fr;
+  }
+
+  .card-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .heading-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .heading-actions .text-button {
+    flex: 1 1 0;
   }
 
 }

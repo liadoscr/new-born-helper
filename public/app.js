@@ -1,5 +1,6 @@
 const FEEDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const SLEEPY_REMINDER_MS = 5 * 60 * 1000;
+const ROOM_MILK_EXPIRY_MS = 4 * 60 * 60 * 1000;
 const PEE_GOAL = 5;
 const POOP_GOAL = 3;
 const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
@@ -18,6 +19,11 @@ const GUEST_USER = {
 const defaultState = {
   feedings: [],
   diapers: [],
+  bottles: [],
+  pumps: [],
+  sync: {
+    partnerEmails: [],
+  },
   settings: {
     feedingIntervalHours: 3,
     sleepyReminderMinutes: 5,
@@ -38,9 +44,26 @@ let scheduledNotificationAt = "";
 const els = {
   activeControls: document.querySelector("#activeControls"),
   activeTimer: document.querySelector("#activeTimer"),
+  addManualButton: document.querySelector("#addManualButton"),
+  bottleButton: document.querySelector("#bottleButton"),
   closeMenuButton: document.querySelector("#closeMenuButton"),
   configHint: document.querySelector("#googleConfigHint"),
+  dessertButton: document.querySelector("#dessertButton"),
   diaperButtons: document.querySelectorAll("[data-diaper]"),
+  entryAmountInput: document.querySelector("#entryAmountInput"),
+  entryDateInput: document.querySelector("#entryDateInput"),
+  entryDessertInput: document.querySelector("#entryDessertInput"),
+  entryDiaperInput: document.querySelector("#entryDiaperInput"),
+  entryDialog: document.querySelector("#entryDialog"),
+  entryDialogTitle: document.querySelector("#entryDialogTitle"),
+  entryEndTimeInput: document.querySelector("#entryEndTimeInput"),
+  entryFields: document.querySelectorAll("[data-entry-fields]"),
+  entryIdInput: document.querySelector("#entryIdInput"),
+  entrySideInput: document.querySelector("#entrySideInput"),
+  entryStartTimeInput: document.querySelector("#entryStartTimeInput"),
+  entryStorageInput: document.querySelector("#entryStorageInput"),
+  entryStorageRow: document.querySelector("#entryStorageRow"),
+  entryTypeInput: document.querySelector("#entryTypeInput"),
   exportButton: document.querySelector("#exportButton"),
   googleSignInButton: document.querySelector("#googleSignInButton"),
   historyList: document.querySelector("#historyList"),
@@ -53,6 +76,12 @@ const els = {
   menuButton: document.querySelector("#menuButton"),
   menuUserEmail: document.querySelector("#menuUserEmail"),
   menuUserName: document.querySelector("#menuUserName"),
+  milkAmountInput: document.querySelector("#milkAmountInput"),
+  milkDateInput: document.querySelector("#milkDateInput"),
+  milkDialog: document.querySelector("#milkDialog"),
+  milkDialogTitle: document.querySelector("#milkDialogTitle"),
+  milkMode: document.querySelector("#milkMode"),
+  milkTimeInput: document.querySelector("#milkTimeInput"),
   navButtons: document.querySelectorAll("[data-view-target]"),
   notificationButton: document.querySelector("#enableNotificationsButton"),
   notificationStatus: document.querySelector("#notificationStatus"),
@@ -68,14 +97,19 @@ const els = {
   peeGoal: document.querySelector("#peeGoal"),
   poopBar: document.querySelector("#poopBar"),
   poopGoal: document.querySelector("#poopGoal"),
+  pumpButton: document.querySelector("#pumpButton"),
+  pumpStorageGroup: document.querySelector("#pumpStorageGroup"),
   rightSideStat: document.querySelector("#rightSideStat"),
   resetDataButton: document.querySelector("#resetDataButton"),
   resetDialog: document.querySelector("#resetDialog"),
+  savePartnerEmailsButton: document.querySelector("#savePartnerEmailsButton"),
   sideButtons: document.querySelectorAll("[data-side]"),
   signOutButton: document.querySelector("#signOutButton"),
   sleepyDialog: document.querySelector("#sleepyDialog"),
   statusDot: document.querySelector("#statusDot"),
   stopButton: document.querySelector("#stopButton"),
+  syncConfigStatus: document.querySelector("#syncConfigStatus"),
+  partnerEmailsInput: document.querySelector("#partnerEmailsInput"),
   syncStatus: document.querySelector("#syncStatus"),
   timerHint: document.querySelector("#timerHint"),
   undoButton: document.querySelector("#undoButton"),
@@ -110,15 +144,28 @@ function init() {
 
   els.pauseButton.addEventListener("click", togglePause);
   els.stopButton.addEventListener("click", stopFeeding);
+  els.dessertButton.addEventListener("click", toggleDessert);
   els.undoButton.addEventListener("click", runUndo);
   els.exportButton.addEventListener("click", exportData);
+  els.addManualButton.addEventListener("click", () => openEntryDialog());
   els.installButton.addEventListener("click", installApp);
+  els.bottleButton.addEventListener("click", () => openMilkDialog("bottle"));
+  els.pumpButton.addEventListener("click", () => openMilkDialog("pump"));
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
   els.resetDataButton.addEventListener("click", openResetDialog);
   els.notificationButton.addEventListener("click", toggleNotifications);
+  els.savePartnerEmailsButton.addEventListener("click", savePartnerEmails);
+  els.entryTypeInput.addEventListener("change", renderEntryDialogFields);
+  els.historyList.addEventListener("click", handleHistoryClick);
   els.resetDialog.addEventListener("close", () => {
     if (els.resetDialog.returnValue === "confirm") resetCurrentUserData();
+  });
+  els.milkDialog.addEventListener("close", () => {
+    if (els.milkDialog.returnValue === "save") saveMilkDialog();
+  });
+  els.entryDialog.addEventListener("close", () => {
+    if (els.entryDialog.returnValue === "save") saveEntryDialog();
   });
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -135,6 +182,7 @@ function init() {
 
   renderAuth();
   renderNotificationState();
+  renderSyncSettings();
   initGoogleAuth();
   render();
   setInterval(render, 1000);
@@ -168,17 +216,29 @@ function saveAuthUser(user) {
 function loadState(user) {
   try {
     const scoped = localStorage.getItem(storageKeyFor(user));
-    if (scoped) return { ...clone(defaultState), ...JSON.parse(scoped) };
+    if (scoped) return normalizeState(JSON.parse(scoped));
 
     if (user.provider === "guest") {
       const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (legacy) return { ...clone(defaultState), ...JSON.parse(legacy) };
+      if (legacy) return normalizeState(JSON.parse(legacy));
     }
 
     return clone(defaultState);
   } catch {
     return clone(defaultState);
   }
+}
+
+function normalizeState(value) {
+  const next = { ...clone(defaultState), ...value };
+  next.feedings = Array.isArray(next.feedings) ? next.feedings : [];
+  next.diapers = Array.isArray(next.diapers) ? next.diapers : [];
+  next.bottles = Array.isArray(next.bottles) ? next.bottles : [];
+  next.pumps = Array.isArray(next.pumps) ? next.pumps : [];
+  next.settings = { ...clone(defaultState.settings), ...(next.settings || {}) };
+  next.sync = { ...clone(defaultState.sync), ...(next.sync || {}) };
+  next.sync.partnerEmails = Array.isArray(next.sync.partnerEmails) ? next.sync.partnerEmails : [];
+  return next;
 }
 
 function saveState() {
@@ -194,6 +254,7 @@ function switchUser(user) {
   clearNextFeedingNotification();
   renderAuth();
   renderNotificationState();
+  renderSyncSettings();
   render();
 }
 
@@ -318,6 +379,7 @@ function resetCurrentUserData() {
   state = clone(defaultState);
   clearNextFeedingNotification();
   clearUndo();
+  renderSyncSettings();
   render();
   showToast("הנתונים אופסו");
 }
@@ -330,6 +392,28 @@ function renderAuth() {
   els.googleSignInButton.hidden = !isGuest;
   els.signOutButton.hidden = isGuest;
   els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : `נשמר עבור ${currentUser.name}`;
+}
+
+function renderSyncSettings() {
+  els.partnerEmailsInput.value = state.sync.partnerEmails.join(", ");
+  const hasCloudConfig = Boolean(window.LULLABY_LOG_CONFIG?.firebaseConfig || window.LULLABY_LOG_CONFIG?.supabaseUrl);
+  if (!currentUser.email) {
+    els.syncConfigStatus.textContent = "יש להתחבר עם Google לפני סנכרון זוגי.";
+  } else if (!hasCloudConfig) {
+    els.syncConfigStatus.textContent = "האימיילים נשמרו, אבל עדיין חסרה הגדרת ענן לסנכרון אמיתי.";
+  } else {
+    els.syncConfigStatus.textContent = "מוכן לחיבור סנכרון ענן.";
+  }
+}
+
+function savePartnerEmails() {
+  state.sync.partnerEmails = els.partnerEmailsInput.value
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+  saveState();
+  renderSyncSettings();
+  showToast("אימיילים לסנכרון נשמרו");
 }
 
 function notificationsEnabled() {
@@ -471,6 +555,33 @@ function stopFeeding() {
   render();
 }
 
+function toggleDessert() {
+  const active = getActiveFeeding();
+  if (!active) return;
+
+  const previous = clone(active);
+  const dessertSide = oppositeSide(active.side);
+  if (active.dessertSide) {
+    delete active.dessertSide;
+    delete active.dessertAt;
+    showUndo("הקינוח הוסר", () => restoreFeeding(previous));
+  } else {
+    active.dessertSide = dessertSide;
+    active.dessertAt = new Date().toISOString();
+    showUndo(`נרשם קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
+  }
+
+  saveState();
+  vibrate(18);
+  render();
+}
+
+function restoreFeeding(previous) {
+  state.feedings = state.feedings.map((item) => (item.id === previous.id ? previous : item));
+  saveState();
+  render();
+}
+
 function togglePause() {
   const active = getActiveFeeding();
   if (!active) return;
@@ -501,6 +612,64 @@ function togglePause() {
   render();
 }
 
+function openMilkDialog(mode) {
+  const now = new Date();
+  els.milkDialog.returnValue = "";
+  els.milkMode.value = mode;
+  els.milkDialogTitle.textContent = mode === "pump" ? "רישום שאיבה" : "רישום בקבוק";
+  els.milkAmountInput.value = "";
+  els.milkDateInput.value = toDateInputValue(now);
+  els.milkTimeInput.value = toTimeInputValue(now);
+  els.pumpStorageGroup.hidden = mode !== "pump";
+  const roomOption = els.pumpStorageGroup.querySelector('input[value="room"]');
+  if (roomOption) roomOption.checked = true;
+
+  if (typeof els.milkDialog.showModal === "function") {
+    els.milkDialog.showModal();
+  }
+}
+
+function saveMilkDialog() {
+  const mode = els.milkMode.value;
+  const createdAt = combineDateAndTime(els.milkDateInput.value, els.milkTimeInput.value);
+  const amountMl = Number(els.milkAmountInput.value || 0);
+
+  if (mode === "pump") {
+    const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
+    const pump = {
+      id: crypto.randomUUID(),
+      amountMl,
+      storage,
+      createdAt,
+      expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
+      createdBy: currentUser.id,
+    };
+    state.pumps.unshift(pump);
+    showUndo("נרשמה שאיבה", () => {
+      state.pumps = state.pumps.filter((item) => item.id !== pump.id);
+      saveState();
+      render();
+    });
+  } else {
+    const bottle = {
+      id: crypto.randomUUID(),
+      amountMl,
+      createdAt,
+      createdBy: currentUser.id,
+    };
+    state.bottles.unshift(bottle);
+    showUndo("נרשם בקבוק", () => {
+      state.bottles = state.bottles.filter((item) => item.id !== bottle.id);
+      saveState();
+      render();
+    });
+  }
+
+  saveState();
+  vibrate(18);
+  render();
+}
+
 function closeOpenPause(feeding) {
   const openPause = feeding.pauses.find((pause) => !pause.endedAt);
   if (openPause) openPause.endedAt = new Date().toISOString();
@@ -527,7 +696,7 @@ function addDiaper(type) {
 
 function render() {
   const active = getActiveFeeding();
-  const latest = state.feedings[0];
+  const latest = getLatestFeeding();
   const latestStarted = latest ? new Date(latest.startedAt) : null;
 
   renderFeeding(active, latest, latestStarted);
@@ -542,10 +711,14 @@ function renderFeeding(active, latest, latestStarted) {
 
   if (active) {
     const elapsed = Date.now() - new Date(active.startedAt).getTime();
+    const dessertSide = oppositeSide(active.side);
     els.activeTimer.textContent = formatDuration(elapsed);
     els.partnerElapsed.textContent = formatDuration(elapsed);
-    els.timerHint.textContent = `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}`;
+    els.timerHint.textContent = active.dessertSide
+      ? `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)} + קינוח ${sideLabel(active.dessertSide)}`
+      : `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}`;
     els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
+    els.dessertButton.textContent = active.dessertSide ? `בטל קינוח ${sideLabel(active.dessertSide)}` : `קינוח ${sideLabel(dessertSide)}`;
   } else {
     els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
     els.partnerElapsed.textContent = latestStarted ? timeSince(latestStarted) : "--";
@@ -556,10 +729,10 @@ function renderFeeding(active, latest, latestStarted) {
   renderSideButtons(active, latest);
 
   if (latest) {
-    const nextSide = latest.side === "right" ? "left" : "right";
+    const nextSide = nextStartSide(latest);
     const nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
     els.nextSideText.textContent = sideLabel(nextSide);
-    els.lastFeedText.textContent = `הנקה אחרונה: ${sideLabel(latest.side)} · ${formatTime(latest.startedAt)}`;
+    els.lastFeedText.textContent = `הנקה אחרונה: ${feedingSummary(latest)} · ${formatTime(latest.startedAt)}`;
     els.nextFeedText.textContent = formatTime(nextFeed);
     els.nextFeedRelative.textContent = relativeDueText(nextFeed);
     renderPartnerStatus(nextFeed);
@@ -582,7 +755,7 @@ function renderFeeding(active, latest, latestStarted) {
 
 function scheduleNextFeedingNotification(nextFeed) {
   if (!nextFeed) {
-    const latest = state.feedings[0];
+    const latest = getLatestFeeding();
     if (!latest) return;
     nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
   }
@@ -616,8 +789,8 @@ function clearNextFeedingNotification() {
 function sendNextFeedingNotification() {
   if (!notificationsEnabled() || Notification.permission !== "granted") return;
 
-  const latest = state.feedings[0];
-  const nextSide = latest ? sideLabel(latest.side === "right" ? "left" : "right") : "";
+  const latest = getLatestFeeding();
+  const nextSide = latest ? sideLabel(nextStartSide(latest)) : "";
   const body = nextSide ? `הגיע זמן ההאכלה. כדאי להתחיל מצד ${nextSide}.` : "הגיע זמן ההאכלה.";
 
   new Notification("NewBorn Helper", {
@@ -639,7 +812,7 @@ function renderSideButtons(active, latest) {
       return;
     }
 
-    if (latest?.side === side) button.classList.add("is-recent");
+    if (nextStartSide(latest) === side) button.classList.add("is-recent");
   });
 
   els.rightSideStat.textContent = sideStatusText("right", active, latest);
@@ -649,7 +822,7 @@ function renderSideButtons(active, latest) {
 function sideStatusText(side, active, latest) {
   if (active?.side === side) return "פעיל";
   if (active) return "ממתין";
-  if (latest?.side === side) return "אחרון";
+  if (latest && nextStartSide(latest) === side) return "להתחיל כאן";
   return "התחלה";
 }
 
@@ -679,7 +852,7 @@ function renderDiapers() {
   const todaysDiapers = state.diapers.filter((item) => getDateKey(item.createdAt) === today);
   const peeCount = todaysDiapers.filter((item) => item.type === "pee" || item.type === "both").length;
   const poopCount = todaysDiapers.filter((item) => item.type === "poop" || item.type === "both").length;
-  const latestDiaper = state.diapers[0];
+  const latestDiaper = getLatestByDate(state.diapers, "createdAt");
 
   els.peeGoal.textContent = `${peeCount}/${PEE_GOAL}`;
   els.poopGoal.textContent = `${poopCount}/${POOP_GOAL}`;
@@ -691,29 +864,51 @@ function renderDiapers() {
 }
 
 function renderHistory() {
-  const feedingEvents = state.feedings.slice(0, 8).map((feeding) => ({
+  const feedingEvents = state.feedings.map((feeding) => ({
     type: "feeding",
+    id: feeding.id,
     at: feeding.startedAt,
-    title: `הנקה מצד ${sideLabel(feeding.side)}`,
-    icon: feeding.side === "right" ? "🤱" : "🍼",
+    title: `הנקה: ${feedingSummary(feeding)}`,
+    icon: "🤱",
     duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
   }));
-  const diaperEvents = state.diapers.slice(0, 8).map((diaper) => ({
+  const diaperEvents = state.diapers.map((diaper) => ({
     type: "diaper",
+    id: diaper.id,
     at: diaper.createdAt,
     title: diaperLabel(diaper.type),
     icon: diaperIcon(diaper.type),
     duration: "",
   }));
-  const events = [...feedingEvents, ...diaperEvents]
+  const bottleEvents = state.bottles.map((bottle) => ({
+    type: "bottle",
+    id: bottle.id,
+    at: bottle.createdAt,
+    title: `בקבוק${bottle.amountMl ? ` ${bottle.amountMl} מ"ל` : ""}`,
+    icon: "🍼",
+    duration: "",
+  }));
+  const pumpEvents = state.pumps.map((pump) => {
+    const expired = isPumpExpired(pump);
+    return {
+      type: "pump",
+      id: pump.id,
+      at: pump.createdAt,
+      title: `שאיבה${pump.amountMl ? ` ${pump.amountMl} מ"ל` : ""}`,
+      icon: "⇢",
+      duration: pump.storage === "fridge" ? "במקרר" : expired ? "פג תוקף" : `בתוקף עד ${formatTime(pump.expiresAt)}`,
+      expired,
+    };
+  });
+  const events = [...feedingEvents, ...diaperEvents, ...bottleEvents, ...pumpEvents]
     .sort((a, b) => new Date(b.at) - new Date(a.at))
-    .slice(0, 10);
+    .slice(0, 14);
 
   els.historyList.innerHTML = events.length
     ? events
         .map(
           (event) => `
-            <li>
+            <li class="${event.expired ? "is-expired" : ""}">
               <div class="history-leading">
                 <span class="history-icon" aria-hidden="true">${event.icon}</span>
                 <div class="history-main">
@@ -723,13 +918,122 @@ function renderHistory() {
               </div>
               <div class="history-meta">
                 <span>שעה ${formatTime(event.at)}</span>
-                ${event.type === "feeding" ? `<span>משך ${event.duration}</span>` : ""}
+                ${event.duration ? `<span>${event.type === "feeding" ? "משך " : ""}${event.duration}</span>` : ""}
+                <button class="text-button history-edit" type="button" data-edit-type="${event.type}" data-edit-id="${event.id}">עריכה</button>
               </div>
             </li>
           `,
         )
         .join("")
     : `<li><strong>עוד אין אירועים</strong><span>הלילה מתחיל נקי</span></li>`;
+}
+
+function handleHistoryClick(event) {
+  const button = event.target.closest("[data-edit-type]");
+  if (!button) return;
+  openEntryDialog(button.dataset.editType, button.dataset.editId);
+}
+
+function openEntryDialog(type = "feeding", id = "") {
+  const item = id ? findEvent(type, id) : null;
+  const now = new Date();
+  const at = item ? new Date(type === "feeding" ? item.startedAt : item.createdAt) : now;
+
+  els.entryDialog.returnValue = "";
+  els.entryIdInput.value = id;
+  els.entryTypeInput.value = type;
+  els.entryTypeInput.disabled = Boolean(id);
+  els.entryDialogTitle.textContent = id ? "עריכת פעולה" : "הוספה בדיעבד";
+  els.entryDateInput.value = toDateInputValue(at);
+  els.entryStartTimeInput.value = toTimeInputValue(at);
+  els.entryEndTimeInput.value = item?.endedAt ? toTimeInputValue(new Date(item.endedAt)) : "";
+  els.entrySideInput.value = item?.side || "right";
+  els.entryDessertInput.checked = Boolean(item?.dessertSide);
+  els.entryDiaperInput.value = item?.type || "pee";
+  els.entryAmountInput.value = item?.amountMl || "";
+  els.entryStorageInput.value = item?.storage || "room";
+  renderEntryDialogFields();
+
+  if (typeof els.entryDialog.showModal === "function") {
+    els.entryDialog.showModal();
+  }
+}
+
+function renderEntryDialogFields() {
+  const type = els.entryTypeInput.value;
+  els.entryFields.forEach((group) => {
+    const key = group.dataset.entryFields;
+    group.hidden = !(key === type || (key === "milk" && (type === "bottle" || type === "pump")));
+  });
+  els.entryStorageRow.hidden = type !== "pump";
+}
+
+function saveEntryDialog() {
+  const id = els.entryIdInput.value;
+  const type = els.entryTypeInput.value;
+  const at = combineDateAndTime(els.entryDateInput.value, els.entryStartTimeInput.value);
+
+  if (type === "feeding") {
+    saveFeedingEntry(id, at);
+  } else if (type === "diaper") {
+    saveDiaperEntry(id, at);
+  } else if (type === "bottle") {
+    saveBottleEntry(id, at);
+  } else if (type === "pump") {
+    savePumpEntry(id, at);
+  }
+
+  els.entryTypeInput.disabled = false;
+  saveState();
+  render();
+  showToast(id ? "הפעולה עודכנה" : "הפעולה נוספה");
+}
+
+function saveFeedingEntry(id, startedAt) {
+  const side = els.entrySideInput.value;
+  const endTime = els.entryEndTimeInput.value;
+  const endedAt = endTime ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, endTime)) : "";
+  const payload = {
+    id: id || crypto.randomUUID(),
+    side,
+    startedAt,
+    endedAt,
+    dessertSide: els.entryDessertInput.checked ? oppositeSide(side) : "",
+    dessertAt: els.entryDessertInput.checked ? endedAt || startedAt : "",
+    pauses: findEvent("feeding", id)?.pauses || [],
+    createdBy: findEvent("feeding", id)?.createdBy || currentUser.id,
+  };
+  upsertById(state.feedings, payload);
+}
+
+function saveDiaperEntry(id, createdAt) {
+  upsertById(state.diapers, {
+    id: id || crypto.randomUUID(),
+    type: els.entryDiaperInput.value,
+    createdAt,
+    createdBy: findEvent("diaper", id)?.createdBy || currentUser.id,
+  });
+}
+
+function saveBottleEntry(id, createdAt) {
+  upsertById(state.bottles, {
+    id: id || crypto.randomUUID(),
+    amountMl: Number(els.entryAmountInput.value || 0),
+    createdAt,
+    createdBy: findEvent("bottle", id)?.createdBy || currentUser.id,
+  });
+}
+
+function savePumpEntry(id, createdAt) {
+  const storage = els.entryStorageInput.value;
+  upsertById(state.pumps, {
+    id: id || crypto.randomUUID(),
+    amountMl: Number(els.entryAmountInput.value || 0),
+    storage,
+    createdAt,
+    expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
+    createdBy: findEvent("pump", id)?.createdBy || currentUser.id,
+  });
 }
 
 function maybeShowSleepyReminder(active) {
@@ -754,6 +1058,54 @@ function showView(viewName) {
 
 function getActiveFeeding() {
   return state.feedings.find((feeding) => !feeding.endedAt);
+}
+
+function getLatestFeeding() {
+  return getLatestByDate(
+    state.feedings.filter((feeding) => feeding.startedAt),
+    "startedAt",
+  );
+}
+
+function getLatestByDate(items, field) {
+  return [...items].sort((a, b) => new Date(b[field]) - new Date(a[field]))[0];
+}
+
+function findEvent(type, id) {
+  if (!id) return null;
+  const collection = getCollectionForType(type);
+  return collection.find((item) => item.id === id) || null;
+}
+
+function getCollectionForType(type) {
+  if (type === "feeding") return state.feedings;
+  if (type === "diaper") return state.diapers;
+  if (type === "bottle") return state.bottles;
+  return state.pumps;
+}
+
+function upsertById(collection, payload) {
+  const index = collection.findIndex((item) => item.id === payload.id);
+  if (index >= 0) collection[index] = payload;
+  else collection.unshift(payload);
+}
+
+function nextStartSide(feeding) {
+  if (!feeding) return "";
+  return feeding.dessertSide || oppositeSide(feeding.side);
+}
+
+function feedingSummary(feeding) {
+  const main = sideLabel(feeding.side);
+  return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)}` : main;
+}
+
+function oppositeSide(side) {
+  return side === "right" ? "left" : "right";
+}
+
+function isPumpExpired(pump) {
+  return Boolean(pump.expiresAt && new Date(pump.expiresAt).getTime() <= Date.now());
 }
 
 function showUndo(message, action) {
@@ -794,11 +1146,13 @@ function buildExportRows() {
   const feedingRows = state.feedings.map((feeding) => ({
     _sortAt: feeding.startedAt,
     "סוג פעולה": "הנקה",
-    "פירוט": `צד ${sideLabel(feeding.side)}`,
+    "פירוט": feedingSummary(feeding),
     "תאריך": formatDateOnly(feeding.startedAt),
     "שעת התחלה": formatTime(feeding.startedAt),
     "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
     "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
+    "כמות": "",
+    "תוקף": "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
   const diaperRows = state.diapers.map((diaper) => ({
@@ -809,14 +1163,40 @@ function buildExportRows() {
     "שעת התחלה": formatTime(diaper.createdAt),
     "שעת סיום": "",
     "משך": "",
+    "כמות": "",
+    "תוקף": "",
     "נוצר על ידי": diaper.createdBy || "",
   }));
+  const bottleRows = state.bottles.map((bottle) => ({
+    _sortAt: bottle.createdAt,
+    "סוג פעולה": "בקבוק",
+    "פירוט": "בקבוק שאוב",
+    "תאריך": formatDateOnly(bottle.createdAt),
+    "שעת התחלה": formatTime(bottle.createdAt),
+    "שעת סיום": "",
+    "משך": "",
+    "כמות": bottle.amountMl ? `${bottle.amountMl} מ״ל` : "",
+    "תוקף": "",
+    "נוצר על ידי": bottle.createdBy || "",
+  }));
+  const pumpRows = state.pumps.map((pump) => ({
+    _sortAt: pump.createdAt,
+    "סוג פעולה": "שאיבה",
+    "פירוט": pump.storage === "fridge" ? "נשמר במקרר" : "נשמר בחוץ",
+    "תאריך": formatDateOnly(pump.createdAt),
+    "שעת התחלה": formatTime(pump.createdAt),
+    "שעת סיום": "",
+    "משך": "",
+    "כמות": pump.amountMl ? `${pump.amountMl} מ״ל` : "",
+    "תוקף": pump.expiresAt ? `${formatDateOnly(pump.expiresAt)} ${formatTime(pump.expiresAt)}` : "מקרר",
+    "נוצר על ידי": pump.createdBy || "",
+  }));
 
-  return [...feedingRows, ...diaperRows].sort((a, b) => new Date(b._sortAt) - new Date(a._sortAt));
+  return [...feedingRows, ...diaperRows, ...bottleRows, ...pumpRows].sort((a, b) => new Date(b._sortAt) - new Date(a._sortAt));
 }
 
 function toCsv(rows) {
-  const headers = ["סוג פעולה", "פירוט", "תאריך", "שעת התחלה", "שעת סיום", "משך", "נוצר על ידי"];
+  const headers = ["סוג פעולה", "פירוט", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "נוצר על ידי"];
   const lines = [headers.join(",")];
   rows.forEach((row) => {
     lines.push(headers.map((header) => csvEscape(row[header])).join(","));
@@ -915,6 +1295,27 @@ function formatDateOnly(value) {
     month: "2-digit",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function toDateInputValue(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function toTimeInputValue(date) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function combineDateAndTime(dateValue, timeValue) {
+  const date = dateValue || toDateInputValue(new Date());
+  const time = timeValue || toTimeInputValue(new Date());
+  return new Date(`${date}T${time}:00`).toISOString();
+}
+
+function normalizeEndDate(startIso, endIso) {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (end < start) end.setDate(end.getDate() + 1);
+  return end.toISOString();
 }
 
 function getTodayKey() {
