@@ -45,7 +45,7 @@ const els = {
   activeControls: document.querySelector("#activeControls"),
   activeTimer: document.querySelector("#activeTimer"),
   addManualButton: document.querySelector("#addManualButton"),
-  bottleButton: document.querySelector("#bottleButton"),
+  bottleSideStat: document.querySelector("#bottleSideStat"),
   closeMenuButton: document.querySelector("#closeMenuButton"),
   configHint: document.querySelector("#googleConfigHint"),
   dessertButton: document.querySelector("#dessertButton"),
@@ -57,7 +57,10 @@ const els = {
   entryDialog: document.querySelector("#entryDialog"),
   entryDialogTitle: document.querySelector("#entryDialogTitle"),
   entryEndTimeInput: document.querySelector("#entryEndTimeInput"),
+  entryDessertLabel: document.querySelector("#entryDessertLabel"),
   entryFields: document.querySelectorAll("[data-entry-fields]"),
+  entryFeedingAmountInput: document.querySelector("#entryFeedingAmountInput"),
+  entryFeedingAmountRow: document.querySelector("#entryFeedingAmountRow"),
   entryIdInput: document.querySelector("#entryIdInput"),
   entrySideInput: document.querySelector("#entrySideInput"),
   entryStartTimeInput: document.querySelector("#entryStartTimeInput"),
@@ -78,10 +81,13 @@ const els = {
   menuUserName: document.querySelector("#menuUserName"),
   milkAmountInput: document.querySelector("#milkAmountInput"),
   milkDateInput: document.querySelector("#milkDateInput"),
+  milkDateRow: document.querySelector("#milkDateRow"),
   milkDialog: document.querySelector("#milkDialog"),
   milkDialogTitle: document.querySelector("#milkDialogTitle"),
   milkMode: document.querySelector("#milkMode"),
+  milkTargetId: document.querySelector("#milkTargetId"),
   milkTimeInput: document.querySelector("#milkTimeInput"),
+  milkTimeRow: document.querySelector("#milkTimeRow"),
   navButtons: document.querySelectorAll("[data-view-target]"),
   notificationButton: document.querySelector("#enableNotificationsButton"),
   notificationStatus: document.querySelector("#notificationStatus"),
@@ -149,7 +155,6 @@ function init() {
   els.exportButton.addEventListener("click", exportData);
   els.addManualButton.addEventListener("click", () => openEntryDialog());
   els.installButton.addEventListener("click", installApp);
-  els.bottleButton.addEventListener("click", () => openMilkDialog("bottle"));
   els.pumpButton.addEventListener("click", () => openMilkDialog("pump"));
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
@@ -157,6 +162,7 @@ function init() {
   els.notificationButton.addEventListener("click", toggleNotifications);
   els.savePartnerEmailsButton.addEventListener("click", savePartnerEmails);
   els.entryTypeInput.addEventListener("change", renderEntryDialogFields);
+  els.entrySideInput.addEventListener("change", renderEntryDialogFields);
   els.historyList.addEventListener("click", handleHistoryClick);
   els.resetDialog.addEventListener("close", () => {
     if (els.resetDialog.returnValue === "confirm") resetCurrentUserData();
@@ -529,7 +535,7 @@ function startFeeding(side) {
 
   state.feedings.unshift(feeding);
   saveState();
-  showUndo(`התחילה הנקה מצד ${sideLabel(side)}`, () => {
+  showUndo(`${isBottleFeeding(feeding) ? "התחיל בקבוק" : `התחילה הנקה מצד ${sideLabel(side)}`}`, () => {
     state.feedings = state.feedings.filter((item) => item.id !== feeding.id);
     saveState();
     render();
@@ -546,18 +552,19 @@ function stopFeeding() {
   closeOpenPause(active);
   active.endedAt = new Date().toISOString();
   saveState();
-  showUndo("ההנקה הסתיימה", () => {
+  showUndo(isBottleFeeding(active) ? "הבקבוק הסתיים" : "ההנקה הסתיימה", () => {
     state.feedings = state.feedings.map((item) => (item.id === previous.id ? previous : item));
     saveState();
     render();
   });
+  if (isBottleFeeding(active)) openMilkDialog("bottle-finish", active);
   vibrate(35);
   render();
 }
 
 function toggleDessert() {
   const active = getActiveFeeding();
-  if (!active) return;
+  if (!active || isBottleFeeding(active)) return;
 
   const previous = clone(active);
   const dessertSide = oppositeSide(active.side);
@@ -612,15 +619,18 @@ function togglePause() {
   render();
 }
 
-function openMilkDialog(mode) {
+function openMilkDialog(mode, feeding = null) {
   const now = new Date();
   els.milkDialog.returnValue = "";
   els.milkMode.value = mode;
-  els.milkDialogTitle.textContent = mode === "pump" ? "רישום שאיבה" : "רישום בקבוק";
-  els.milkAmountInput.value = "";
+  els.milkTargetId.value = feeding?.id || "";
+  els.milkDialogTitle.textContent = mode === "pump" ? "רישום שאיבה" : "כמה היא שתתה?";
+  els.milkAmountInput.value = feeding?.amountMl || "";
   els.milkDateInput.value = toDateInputValue(now);
   els.milkTimeInput.value = toTimeInputValue(now);
   els.pumpStorageGroup.hidden = mode !== "pump";
+  els.milkDateRow.hidden = mode === "bottle-finish";
+  els.milkTimeRow.hidden = mode === "bottle-finish";
   const roomOption = els.pumpStorageGroup.querySelector('input[value="room"]');
   if (roomOption) roomOption.checked = true;
 
@@ -633,6 +643,17 @@ function saveMilkDialog() {
   const mode = els.milkMode.value;
   const createdAt = combineDateAndTime(els.milkDateInput.value, els.milkTimeInput.value);
   const amountMl = Number(els.milkAmountInput.value || 0);
+
+  if (mode === "bottle-finish") {
+    const feeding = state.feedings.find((item) => item.id === els.milkTargetId.value);
+    if (feeding) {
+      feeding.amountMl = amountMl;
+      saveState();
+      render();
+      showToast(amountMl ? `נרשם בקבוק ${amountMl} מ"ל` : "הבקבוק נשמר");
+    }
+    return;
+  }
 
   if (mode === "pump") {
     const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
@@ -714,16 +735,27 @@ function renderFeeding(active, latest, latestStarted) {
     const dessertSide = oppositeSide(active.side);
     els.activeTimer.textContent = formatDuration(elapsed);
     els.partnerElapsed.textContent = formatDuration(elapsed);
-    els.timerHint.textContent = active.dessertSide
-      ? `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)} + קינוח ${sideLabel(active.dessertSide)}`
-      : `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}`;
-    els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
-    els.dessertButton.textContent = active.dessertSide ? `בטל קינוח ${sideLabel(active.dessertSide)}` : `קינוח ${sideLabel(dessertSide)}`;
+    if (isBottleFeeding(active)) {
+      els.timerHint.textContent = `בקבוק התחיל ב-${formatTime(active.startedAt)}`;
+      els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה לבקבוק" : "עצירה";
+      els.stopButton.textContent = "סיום בקבוק";
+      els.dessertButton.hidden = true;
+    } else {
+      els.timerHint.textContent = active.dessertSide
+        ? `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)} + קינוח ${sideLabel(active.dessertSide)}`
+        : `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}`;
+      els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
+      els.stopButton.textContent = "סיום הנקה";
+      els.dessertButton.textContent = active.dessertSide ? `בטל קינוח ${sideLabel(active.dessertSide)}` : `קינוח ${sideLabel(dessertSide)}`;
+      els.dessertButton.hidden = false;
+    }
   } else {
     els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
     els.partnerElapsed.textContent = latestStarted ? timeSince(latestStarted) : "--";
     els.timerHint.textContent = latestStarted ? `עברו ${timeSince(latestStarted)} מתחילת ההנקה האחרונה` : "מוכנה להתחיל";
     els.pauseButton.textContent = "גרעפס / עצירה";
+    els.stopButton.textContent = "סיום הנקה";
+    els.dessertButton.hidden = false;
   }
 
   renderSideButtons(active, latest);
@@ -731,7 +763,7 @@ function renderFeeding(active, latest, latestStarted) {
   if (latest) {
     const nextSide = nextStartSide(latest);
     const nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
-    els.nextSideText.textContent = sideLabel(nextSide);
+    els.nextSideText.textContent = nextSide ? sideLabel(nextSide) : "אין נתונים";
     els.lastFeedText.textContent = `הנקה אחרונה: ${feedingSummary(latest)} · ${formatTime(latest.startedAt)}`;
     els.nextFeedText.textContent = formatTime(nextFeed);
     els.nextFeedRelative.textContent = relativeDueText(nextFeed);
@@ -790,7 +822,8 @@ function sendNextFeedingNotification() {
   if (!notificationsEnabled() || Notification.permission !== "granted") return;
 
   const latest = getLatestFeeding();
-  const nextSide = latest ? sideLabel(nextStartSide(latest)) : "";
+  const nextSideValue = latest ? nextStartSide(latest) : "";
+  const nextSide = nextSideValue ? sideLabel(nextSideValue) : "";
   const body = nextSide ? `הגיע זמן ההאכלה. כדאי להתחיל מצד ${nextSide}.` : "הגיע זמן ההאכלה.";
 
   new Notification("NewBorn Helper", {
@@ -817,11 +850,13 @@ function renderSideButtons(active, latest) {
 
   els.rightSideStat.textContent = sideStatusText("right", active, latest);
   els.leftSideStat.textContent = sideStatusText("left", active, latest);
+  els.bottleSideStat.textContent = sideStatusText("bottle", active, latest);
 }
 
 function sideStatusText(side, active, latest) {
   if (active?.side === side) return "פעיל";
   if (active) return "ממתין";
+  if (side === "bottle") return "האכלה";
   if (latest && nextStartSide(latest) === side) return "להתחיל כאן";
   return "התחלה";
 }
@@ -868,8 +903,8 @@ function renderHistory() {
     type: "feeding",
     id: feeding.id,
     at: feeding.startedAt,
-    title: `הנקה: ${feedingSummary(feeding)}`,
-    icon: "🤱",
+    title: isBottleFeeding(feeding) ? feedingSummary(feeding) : `הנקה: ${feedingSummary(feeding)}`,
+    icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
     duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
   }));
   const diaperEvents = state.diapers.map((diaper) => ({
@@ -949,6 +984,7 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryEndTimeInput.value = item?.endedAt ? toTimeInputValue(new Date(item.endedAt)) : "";
   els.entrySideInput.value = item?.side || "right";
   els.entryDessertInput.checked = Boolean(item?.dessertSide);
+  els.entryFeedingAmountInput.value = item?.amountMl || "";
   els.entryDiaperInput.value = item?.type || "pee";
   els.entryAmountInput.value = item?.amountMl || "";
   els.entryStorageInput.value = item?.storage || "room";
@@ -961,10 +997,13 @@ function openEntryDialog(type = "feeding", id = "") {
 
 function renderEntryDialogFields() {
   const type = els.entryTypeInput.value;
+  const isBottleSide = type === "feeding" && els.entrySideInput.value === "bottle";
   els.entryFields.forEach((group) => {
     const key = group.dataset.entryFields;
     group.hidden = !(key === type || (key === "milk" && (type === "bottle" || type === "pump")));
   });
+  els.entryDessertLabel.hidden = isBottleSide;
+  els.entryFeedingAmountRow.hidden = !isBottleSide;
   els.entryStorageRow.hidden = type !== "pump";
 }
 
@@ -993,13 +1032,15 @@ function saveFeedingEntry(id, startedAt) {
   const side = els.entrySideInput.value;
   const endTime = els.entryEndTimeInput.value;
   const endedAt = endTime ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, endTime)) : "";
+  const isBottle = side === "bottle";
   const payload = {
     id: id || crypto.randomUUID(),
     side,
     startedAt,
     endedAt,
-    dessertSide: els.entryDessertInput.checked ? oppositeSide(side) : "",
-    dessertAt: els.entryDessertInput.checked ? endedAt || startedAt : "",
+    amountMl: isBottle ? Number(els.entryFeedingAmountInput.value || 0) : undefined,
+    dessertSide: !isBottle && els.entryDessertInput.checked ? oppositeSide(side) : "",
+    dessertAt: !isBottle && els.entryDessertInput.checked ? endedAt || startedAt : "",
     pauses: findEvent("feeding", id)?.pauses || [],
     createdBy: findEvent("feeding", id)?.createdBy || currentUser.id,
   };
@@ -1037,7 +1078,7 @@ function savePumpEntry(id, createdAt) {
 }
 
 function maybeShowSleepyReminder(active) {
-  if (!active || active.sleepyReminderShownAt) return;
+  if (!active || active.sleepyReminderShownAt || isBottleFeeding(active)) return;
   const elapsed = Date.now() - new Date(active.startedAt).getTime();
   const hasPause = active.pauses.length > 0;
 
@@ -1092,16 +1133,29 @@ function upsertById(collection, payload) {
 
 function nextStartSide(feeding) {
   if (!feeding) return "";
+  if (isBottleFeeding(feeding)) return nextStartSide(getLatestBreastFeeding());
   return feeding.dessertSide || oppositeSide(feeding.side);
 }
 
 function feedingSummary(feeding) {
+  if (isBottleFeeding(feeding)) return `בקבוק${feeding.amountMl ? ` ${feeding.amountMl} מ"ל` : ""}`;
   const main = sideLabel(feeding.side);
   return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)}` : main;
 }
 
 function oppositeSide(side) {
   return side === "right" ? "left" : "right";
+}
+
+function isBottleFeeding(feeding) {
+  return feeding?.side === "bottle";
+}
+
+function getLatestBreastFeeding() {
+  return getLatestByDate(
+    state.feedings.filter((feeding) => feeding.startedAt && !isBottleFeeding(feeding)),
+    "startedAt",
+  );
 }
 
 function isPumpExpired(pump) {
@@ -1145,13 +1199,13 @@ function exportData() {
 function buildExportRows() {
   const feedingRows = state.feedings.map((feeding) => ({
     _sortAt: feeding.startedAt,
-    "סוג פעולה": "הנקה",
+    "סוג פעולה": isBottleFeeding(feeding) ? "בקבוק" : "הנקה",
     "פירוט": feedingSummary(feeding),
     "תאריך": formatDateOnly(feeding.startedAt),
     "שעת התחלה": formatTime(feeding.startedAt),
     "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
     "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
-    "כמות": "",
+    "כמות": feeding.amountMl ? `${feeding.amountMl} מ״ל` : "",
     "תוקף": "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
@@ -1217,6 +1271,7 @@ async function installApp() {
 }
 
 function sideLabel(side) {
+  if (side === "bottle") return "בקבוק";
   return side === "right" ? "ימין" : "שמאל";
 }
 

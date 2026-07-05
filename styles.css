@@ -309,6 +309,29 @@ p {
   text-align: end;
 }
 
+.milk-amount-row {
+  position: relative;
+}
+
+.milk-amount-row input {
+  min-height: 76px;
+  border-radius: 22px;
+  color: var(--primary);
+  font-size: clamp(2rem, 11vw, 3rem);
+  font-weight: 950;
+  text-align: center;
+  padding-inline: 56px;
+}
+
+.milk-amount-row::after {
+  content: "מ״ל";
+  position: absolute;
+  left: 18px;
+  bottom: 23px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
 .choice-group {
   display: grid;
   gap: 12px;
@@ -624,6 +647,29 @@ p {
 
 .side-button.is-active {
   transform: scale(1.02);
+}
+
+.side-bottle {
+  grid-column: 1 / -1;
+  min-height: 116px;
+  border-color: rgba(69, 223, 164, 0.2);
+  background: rgba(0, 189, 133, 0.1);
+}
+
+.side-bottle.is-active,
+.side-bottle.is-recent {
+  border-color: rgba(69, 223, 164, 0.58);
+  background: rgba(0, 189, 133, 0.16);
+  box-shadow: 0 0 22px rgba(69, 223, 164, 0.14);
+}
+
+.side-bottle .bottle-glyph {
+  color: var(--secondary);
+  font-size: 2rem;
+}
+
+.side-bottle span:last-child {
+  color: var(--secondary);
 }
 
 .drop-icon {

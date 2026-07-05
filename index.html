@@ -80,6 +80,11 @@
             <strong>שמאל</strong>
             <span id="leftSideStat">התחלה</span>
           </button>
+          <button class="side-button side-bottle" id="bottleButton" type="button" data-side="bottle">
+            <span class="bottle-glyph" aria-hidden="true">🍼</span>
+            <strong>בקבוק</strong>
+            <span id="bottleSideStat">האכלה</span>
+          </button>
         </section>
 
         <section class="active-controls" id="activeControls" hidden>
@@ -105,10 +110,6 @@
             <button class="quick-button both" type="button" data-diaper="both">
               <span class="quick-icon both-icon" aria-hidden="true">+</span>
               <strong>גם וגם</strong>
-            </button>
-            <button class="quick-button" id="bottleButton" type="button">
-              <span class="quick-icon bottle" aria-hidden="true">🍼</span>
-              <strong>בקבוק</strong>
             </button>
             <button class="quick-button" id="pumpButton" type="button">
               <span class="quick-icon pump" aria-hidden="true">⇢</span>
@@ -298,16 +299,17 @@
     <dialog class="sleepy-dialog" id="milkDialog">
       <form method="dialog">
         <input id="milkMode" type="hidden" />
+        <input id="milkTargetId" type="hidden" />
         <h2 id="milkDialogTitle">רישום חלב</h2>
-        <label class="field-row">
+        <label class="field-row milk-amount-row">
           <span>כמות במ"ל</span>
           <input id="milkAmountInput" type="number" min="0" step="5" inputmode="numeric" placeholder="לדוגמה 60" />
         </label>
-        <label class="field-row">
+        <label class="field-row" id="milkDateRow">
           <span>תאריך</span>
           <input id="milkDateInput" type="date" />
         </label>
-        <label class="field-row">
+        <label class="field-row" id="milkTimeRow">
           <span>שעה</span>
           <input id="milkTimeInput" type="time" />
         </label>
@@ -351,13 +353,18 @@
             <select id="entrySideInput">
               <option value="right">ימין</option>
               <option value="left">שמאל</option>
+              <option value="bottle">בקבוק</option>
             </select>
           </label>
           <label class="field-row">
             <span>שעת סיום</span>
             <input id="entryEndTimeInput" type="time" />
           </label>
-          <label class="inline-check">
+          <label class="field-row" id="entryFeedingAmountRow" hidden>
+            <span>כמות במ"ל</span>
+            <input id="entryFeedingAmountInput" type="number" min="0" step="5" inputmode="numeric" />
+          </label>
+          <label class="inline-check" id="entryDessertLabel">
             <input id="entryDessertInput" type="checkbox" />
             היה קינוח מהצד השני
           </label>
