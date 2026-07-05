@@ -46,6 +46,7 @@ const els = {
   activeControls: document.querySelector("#activeControls"),
   activeTimer: document.querySelector("#activeTimer"),
   addManualButton: document.querySelector("#addManualButton"),
+  bottleButton: document.querySelector("#bottleButton"),
   bottleSideStat: document.querySelector("#bottleSideStat"),
   closeMenuButton: document.querySelector("#closeMenuButton"),
   configHint: document.querySelector("#googleConfigHint"),
@@ -896,6 +897,10 @@ function sendNextFeedingNotification() {
 }
 
 function renderSideButtons(active, latest) {
+  const hasPump = getPumpOptions().length > 0;
+  els.bottleButton.disabled = !hasPump && !active;
+  els.bottleButton.setAttribute("aria-disabled", String(!hasPump && !active));
+
   els.sideButtons.forEach((button) => {
     const side = button.dataset.side;
     button.classList.remove("is-active", "is-dimmed", "is-recent");
@@ -911,7 +916,7 @@ function renderSideButtons(active, latest) {
 
   els.rightSideStat.textContent = sideStatusText("right", active, latest);
   els.leftSideStat.textContent = sideStatusText("left", active, latest);
-  els.bottleSideStat.textContent = sideStatusText("bottle", active, latest);
+  els.bottleSideStat.textContent = hasPump ? sideStatusText("bottle", active, latest) : "צריך שאיבה";
 }
 
 function sideStatusText(side, active, latest) {

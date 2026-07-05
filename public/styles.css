@@ -668,6 +668,12 @@ p {
   opacity: 0.42;
 }
 
+.side-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+  transform: none;
+}
+
 .side-button.is-active {
   transform: scale(1.02);
 }
@@ -693,6 +699,17 @@ p {
 
 .side-bottle span:last-child {
   color: var(--secondary);
+}
+
+.side-bottle:disabled {
+  border-color: rgba(198, 197, 213, 0.12);
+  background: rgba(52, 52, 59, 0.28);
+  box-shadow: none;
+}
+
+.side-bottle:disabled .bottle-glyph,
+.side-bottle:disabled span:last-child {
+  color: var(--muted);
 }
 
 .drop-icon {
