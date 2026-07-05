@@ -327,16 +327,7 @@ p {
   font-size: clamp(2rem, 11vw, 3rem);
   font-weight: 950;
   text-align: center;
-  padding-inline: 56px;
-}
-
-.milk-amount-row::after {
-  content: "מ״ל";
-  position: absolute;
-  left: 18px;
-  bottom: 23px;
-  color: var(--muted);
-  font-weight: 900;
+  padding-inline: 18px;
 }
 
 .choice-group {

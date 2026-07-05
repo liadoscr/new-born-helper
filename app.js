@@ -48,6 +48,7 @@ const els = {
   bottleSideStat: document.querySelector("#bottleSideStat"),
   closeMenuButton: document.querySelector("#closeMenuButton"),
   configHint: document.querySelector("#googleConfigHint"),
+  entryAmountUnitInput: document.querySelector("#entryAmountUnitInput"),
   dessertButton: document.querySelector("#dessertButton"),
   diaperButtons: document.querySelectorAll("[data-diaper]"),
   entryAmountInput: document.querySelector("#entryAmountInput"),
@@ -61,6 +62,8 @@ const els = {
   entryFields: document.querySelectorAll("[data-entry-fields]"),
   entryFeedingAmountInput: document.querySelector("#entryFeedingAmountInput"),
   entryFeedingAmountRow: document.querySelector("#entryFeedingAmountRow"),
+  entryFeedingUnitInput: document.querySelector("#entryFeedingUnitInput"),
+  entryFeedingUnitRow: document.querySelector("#entryFeedingUnitRow"),
   entryIdInput: document.querySelector("#entryIdInput"),
   entrySideInput: document.querySelector("#entrySideInput"),
   entryStartTimeInput: document.querySelector("#entryStartTimeInput"),
@@ -88,6 +91,8 @@ const els = {
   milkTargetId: document.querySelector("#milkTargetId"),
   milkTimeInput: document.querySelector("#milkTimeInput"),
   milkTimeRow: document.querySelector("#milkTimeRow"),
+  milkUnitInput: document.querySelector("#milkUnitInput"),
+  milkUnitRow: document.querySelector("#milkUnitRow"),
   navButtons: document.querySelectorAll("[data-view-target]"),
   notificationButton: document.querySelector("#enableNotificationsButton"),
   notificationStatus: document.querySelector("#notificationStatus"),
@@ -625,7 +630,8 @@ function openMilkDialog(mode, feeding = null) {
   els.milkMode.value = mode;
   els.milkTargetId.value = feeding?.id || "";
   els.milkDialogTitle.textContent = mode === "pump" ? "רישום שאיבה" : "כמה היא שתתה?";
-  els.milkAmountInput.value = feeding?.amountMl || "";
+  els.milkAmountInput.value = amountValue(feeding);
+  els.milkUnitInput.value = amountUnit(feeding);
   els.milkDateInput.value = toDateInputValue(now);
   els.milkTimeInput.value = toTimeInputValue(now);
   els.pumpStorageGroup.hidden = mode !== "pump";
@@ -642,15 +648,18 @@ function openMilkDialog(mode, feeding = null) {
 function saveMilkDialog() {
   const mode = els.milkMode.value;
   const createdAt = combineDateAndTime(els.milkDateInput.value, els.milkTimeInput.value);
-  const amountMl = Number(els.milkAmountInput.value || 0);
+  const amount = normalizeAmount(els.milkAmountInput.value);
+  const unit = els.milkUnitInput.value || "ml";
 
   if (mode === "bottle-finish") {
     const feeding = state.feedings.find((item) => item.id === els.milkTargetId.value);
     if (feeding) {
-      feeding.amountMl = amountMl;
+      feeding.amountValue = amount;
+      feeding.amountUnit = unit;
+      delete feeding.amountMl;
       saveState();
       render();
-      showToast(amountMl ? `נרשם בקבוק ${amountMl} מ"ל` : "הבקבוק נשמר");
+      showToast(amount ? `נרשם ${formatAmount({ amountValue: amount, amountUnit: unit })}` : "הבקבוק נשמר");
     }
     return;
   }
@@ -659,7 +668,8 @@ function saveMilkDialog() {
     const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
     const pump = {
       id: crypto.randomUUID(),
-      amountMl,
+      amountValue: amount,
+      amountUnit: unit,
       storage,
       createdAt,
       expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
@@ -674,7 +684,8 @@ function saveMilkDialog() {
   } else {
     const bottle = {
       id: crypto.randomUUID(),
-      amountMl,
+      amountValue: amount,
+      amountUnit: unit,
       createdAt,
       createdBy: currentUser.id,
     };
@@ -919,7 +930,7 @@ function renderHistory() {
     type: "bottle",
     id: bottle.id,
     at: bottle.createdAt,
-    title: `בקבוק${bottle.amountMl ? ` ${bottle.amountMl} מ"ל` : ""}`,
+    title: `בקבוק${formatAmount(bottle) ? ` ${formatAmount(bottle)}` : ""}`,
     icon: "🍼",
     duration: "",
   }));
@@ -929,7 +940,7 @@ function renderHistory() {
       type: "pump",
       id: pump.id,
       at: pump.createdAt,
-      title: `שאיבה${pump.amountMl ? ` ${pump.amountMl} מ"ל` : ""}`,
+      title: `שאיבה${formatAmount(pump) ? ` ${formatAmount(pump)}` : ""}`,
       icon: "⇢",
       duration: pump.storage === "fridge" ? "במקרר" : expired ? "פג תוקף" : `בתוקף עד ${formatTime(pump.expiresAt)}`,
       expired,
@@ -984,9 +995,11 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryEndTimeInput.value = item?.endedAt ? toTimeInputValue(new Date(item.endedAt)) : "";
   els.entrySideInput.value = item?.side || "right";
   els.entryDessertInput.checked = Boolean(item?.dessertSide);
-  els.entryFeedingAmountInput.value = item?.amountMl || "";
+  els.entryFeedingAmountInput.value = amountValue(item);
+  els.entryFeedingUnitInput.value = amountUnit(item);
   els.entryDiaperInput.value = item?.type || "pee";
-  els.entryAmountInput.value = item?.amountMl || "";
+  els.entryAmountInput.value = amountValue(item);
+  els.entryAmountUnitInput.value = amountUnit(item);
   els.entryStorageInput.value = item?.storage || "room";
   renderEntryDialogFields();
 
@@ -1004,6 +1017,7 @@ function renderEntryDialogFields() {
   });
   els.entryDessertLabel.hidden = isBottleSide;
   els.entryFeedingAmountRow.hidden = !isBottleSide;
+  els.entryFeedingUnitRow.hidden = !isBottleSide;
   els.entryStorageRow.hidden = type !== "pump";
 }
 
@@ -1038,7 +1052,8 @@ function saveFeedingEntry(id, startedAt) {
     side,
     startedAt,
     endedAt,
-    amountMl: isBottle ? Number(els.entryFeedingAmountInput.value || 0) : undefined,
+    amountValue: isBottle ? normalizeAmount(els.entryFeedingAmountInput.value) : "",
+    amountUnit: isBottle ? els.entryFeedingUnitInput.value || "ml" : "",
     dessertSide: !isBottle && els.entryDessertInput.checked ? oppositeSide(side) : "",
     dessertAt: !isBottle && els.entryDessertInput.checked ? endedAt || startedAt : "",
     pauses: findEvent("feeding", id)?.pauses || [],
@@ -1059,7 +1074,8 @@ function saveDiaperEntry(id, createdAt) {
 function saveBottleEntry(id, createdAt) {
   upsertById(state.bottles, {
     id: id || crypto.randomUUID(),
-    amountMl: Number(els.entryAmountInput.value || 0),
+    amountValue: normalizeAmount(els.entryAmountInput.value),
+    amountUnit: els.entryAmountUnitInput.value || "ml",
     createdAt,
     createdBy: findEvent("bottle", id)?.createdBy || currentUser.id,
   });
@@ -1069,7 +1085,8 @@ function savePumpEntry(id, createdAt) {
   const storage = els.entryStorageInput.value;
   upsertById(state.pumps, {
     id: id || crypto.randomUUID(),
-    amountMl: Number(els.entryAmountInput.value || 0),
+    amountValue: normalizeAmount(els.entryAmountInput.value),
+    amountUnit: els.entryAmountUnitInput.value || "ml",
     storage,
     createdAt,
     expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
@@ -1138,7 +1155,7 @@ function nextStartSide(feeding) {
 }
 
 function feedingSummary(feeding) {
-  if (isBottleFeeding(feeding)) return `בקבוק${feeding.amountMl ? ` ${feeding.amountMl} מ"ל` : ""}`;
+  if (isBottleFeeding(feeding)) return `בקבוק${formatAmount(feeding) ? ` ${formatAmount(feeding)}` : ""}`;
   const main = sideLabel(feeding.side);
   return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)}` : main;
 }
@@ -1160,6 +1177,33 @@ function getLatestBreastFeeding() {
 
 function isPumpExpired(pump) {
   return Boolean(pump.expiresAt && new Date(pump.expiresAt).getTime() <= Date.now());
+}
+
+function normalizeAmount(value) {
+  return String(value ?? "").trim();
+}
+
+function amountValue(item) {
+  if (!item) return "";
+  return normalizeAmount(item.amountValue ?? item.amountMl ?? "");
+}
+
+function amountUnit(item) {
+  if (!item) return "ml";
+  return item.amountUnit || (item.amountMl ? "ml" : "ml");
+}
+
+function amountUnitLabel(unit) {
+  if (unit === "oz") return "oz";
+  if (unit === "spoon") return "כפיות";
+  if (unit === "other") return "אחר";
+  return "מ״ל";
+}
+
+function formatAmount(item) {
+  const value = amountValue(item);
+  if (!value) return "";
+  return `${value} ${amountUnitLabel(amountUnit(item))}`;
 }
 
 function showUndo(message, action) {
@@ -1205,7 +1249,7 @@ function buildExportRows() {
     "שעת התחלה": formatTime(feeding.startedAt),
     "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
     "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
-    "כמות": feeding.amountMl ? `${feeding.amountMl} מ״ל` : "",
+    "כמות": formatAmount(feeding),
     "תוקף": "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
@@ -1229,7 +1273,7 @@ function buildExportRows() {
     "שעת התחלה": formatTime(bottle.createdAt),
     "שעת סיום": "",
     "משך": "",
-    "כמות": bottle.amountMl ? `${bottle.amountMl} מ״ל` : "",
+    "כמות": formatAmount(bottle),
     "תוקף": "",
     "נוצר על ידי": bottle.createdBy || "",
   }));
@@ -1241,7 +1285,7 @@ function buildExportRows() {
     "שעת התחלה": formatTime(pump.createdAt),
     "שעת סיום": "",
     "משך": "",
-    "כמות": pump.amountMl ? `${pump.amountMl} מ״ל` : "",
+    "כמות": formatAmount(pump),
     "תוקף": pump.expiresAt ? `${formatDateOnly(pump.expiresAt)} ${formatTime(pump.expiresAt)}` : "מקרר",
     "נוצר על ידי": pump.createdBy || "",
   }));

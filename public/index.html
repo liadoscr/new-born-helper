@@ -302,8 +302,17 @@
         <input id="milkTargetId" type="hidden" />
         <h2 id="milkDialogTitle">רישום חלב</h2>
         <label class="field-row milk-amount-row">
-          <span>כמות במ"ל</span>
-          <input id="milkAmountInput" type="number" min="0" step="5" inputmode="numeric" placeholder="לדוגמה 60" />
+          <span>כמות</span>
+          <input id="milkAmountInput" type="text" inputmode="decimal" placeholder="לדוגמה 60" />
+        </label>
+        <label class="field-row" id="milkUnitRow">
+          <span>יחידה</span>
+          <select id="milkUnitInput">
+            <option value="ml">מ"ל</option>
+            <option value="oz">oz</option>
+            <option value="spoon">כפיות</option>
+            <option value="other">אחר</option>
+          </select>
         </label>
         <label class="field-row" id="milkDateRow">
           <span>תאריך</span>
@@ -361,8 +370,17 @@
             <input id="entryEndTimeInput" type="time" />
           </label>
           <label class="field-row" id="entryFeedingAmountRow" hidden>
-            <span>כמות במ"ל</span>
-            <input id="entryFeedingAmountInput" type="number" min="0" step="5" inputmode="numeric" />
+            <span>כמות</span>
+            <input id="entryFeedingAmountInput" type="text" inputmode="decimal" />
+          </label>
+          <label class="field-row" id="entryFeedingUnitRow" hidden>
+            <span>יחידה</span>
+            <select id="entryFeedingUnitInput">
+              <option value="ml">מ"ל</option>
+              <option value="oz">oz</option>
+              <option value="spoon">כפיות</option>
+              <option value="other">אחר</option>
+            </select>
           </label>
           <label class="inline-check" id="entryDessertLabel">
             <input id="entryDessertInput" type="checkbox" />
@@ -383,8 +401,17 @@
         <div class="entry-fields" data-entry-fields="milk">
           <strong class="field-section-title">פרטי חלב</strong>
           <label class="field-row">
-            <span>כמות במ"ל</span>
-            <input id="entryAmountInput" type="number" min="0" step="5" inputmode="numeric" />
+            <span>כמות</span>
+            <input id="entryAmountInput" type="text" inputmode="decimal" />
+          </label>
+          <label class="field-row">
+            <span>יחידה</span>
+            <select id="entryAmountUnitInput">
+              <option value="ml">מ"ל</option>
+              <option value="oz">oz</option>
+              <option value="spoon">כפיות</option>
+              <option value="other">אחר</option>
+            </select>
           </label>
           <label class="field-row" id="entryStorageRow">
             <span>אחסון</span>
