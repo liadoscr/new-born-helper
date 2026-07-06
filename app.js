@@ -6,7 +6,6 @@ const POOP_GOAL = 3;
 const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
 const AUTH_STORAGE_KEY = "lullaby-log-auth-user-v1";
 const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
-const GOOGLE_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
@@ -41,7 +40,6 @@ let state = loadState(currentUser);
 let undo = null;
 let undoTimer = null;
 let deferredInstallPrompt = null;
-let googleReady = false;
 let nextFeedingNotificationTimer = null;
 let scheduledNotificationAt = "";
 let pendingBottlePumpId = "";
@@ -307,103 +305,41 @@ function switchUser(user) {
 }
 
 function initGoogleAuth() {
-  const clientId = getGoogleClientId();
-
-  if (!clientId) {
+  if (!hasFirebaseConfig()) {
     els.configHint.hidden = false;
     els.googleSignInButton.disabled = true;
     return;
   }
 
   els.configHint.hidden = true;
-  loadGoogleScript()
-    .then(() => {
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleGoogleCredential,
-        auto_select: false,
-        cancel_on_tap_outside: true,
-      });
-      googleReady = true;
-      els.googleSignInButton.disabled = false;
-    })
-    .catch(() => {
-      els.configHint.hidden = false;
-      els.configHint.textContent = "לא הצלחתי לטעון את Google Sign-In. בדוק חיבור אינטרנט ו-Client ID.";
-      els.googleSignInButton.disabled = true;
-    });
+  els.googleSignInButton.disabled = false;
 }
 
-function getGoogleClientId() {
-  return window.LULLABY_LOG_CONFIG?.googleClientId?.trim() || "";
-}
-
-function loadGoogleScript() {
-  if (window.google?.accounts?.id) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${GOOGLE_SCRIPT_URL}"]`);
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", reject, { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = GOOGLE_SCRIPT_URL;
-    script.async = true;
-    script.defer = true;
-    script.onload = resolve;
-    script.onerror = reject;
-    document.head.append(script);
-  });
-}
-
-function signInWithGoogle() {
-  if (!googleReady || !window.google?.accounts?.id) {
-    showToast("Google Login עדיין לא מוגדר");
+async function signInWithGoogle() {
+  const services = await loadFirebaseServices();
+  if (!services) {
+    els.configHint.hidden = false;
+    els.configHint.textContent = "Firebase עדיין לא מוגדר, לכן אי אפשר להתחבר עם Google.";
     return;
   }
 
-  window.google.accounts.id.prompt((notification) => {
-    if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-      els.configHint.hidden = false;
-      els.configHint.textContent = "Google לא הציג חלון התחברות. ודא שה-Origin מוגדר ב-Google Cloud.";
-    }
-  });
-}
-
-async function handleGoogleCredential(response) {
-  const profile = parseJwt(response.credential);
-  const user = {
-    id: `google:${profile.sub}`,
-    name: profile.name || profile.email || "משתמש Google",
-    email: profile.email || "",
-    picture: profile.picture || "",
-    provider: "google",
-  };
-  switchUser(user);
-  closeMenu();
-  showToast(`מחובר כ-${user.name}`);
-  await signInFirebaseWithGoogleToken(response.credential);
-}
-
-function parseJwt(token) {
-  const payload = token.split(".")[1];
-  const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
-  const json = decodeURIComponent(
-    atob(base64)
-      .split("")
-      .map((char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
-      .join(""),
-  );
-  return JSON.parse(json);
+  try {
+    setCloudStatus("מתחבר ל-Google...", "נפתח חלון התחברות של Firebase Auth.");
+    const provider = new services.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    const result = await services.signInWithPopup(services.auth, provider);
+    const user = userFromFirebase(result.user);
+    switchUser(user);
+    closeMenu();
+    showToast(`מחובר כ-${user.name}`);
+    await connectCloudSync();
+  } catch (error) {
+    setCloudStatus("נשמר מקומית", `Firebase Auth נכשל: ${error.message}`);
+    showToast("התחברות Google נכשלה. בדוק ש-Google provider והדומיין מוגדרים ב-Firebase.");
+  }
 }
 
 async function signOut() {
-  if (window.google?.accounts?.id) {
-    window.google.accounts.id.disableAutoSelect();
-  }
   await signOutFirebase();
   stopCloudSync();
   switchUser(GUEST_USER);
@@ -460,7 +396,7 @@ async function loadFirebaseServices() {
         query: firestoreModule.query,
         serverTimestamp: firestoreModule.serverTimestamp,
         setDoc: firestoreModule.setDoc,
-        signInWithCredential: authModule.signInWithCredential,
+        signInWithPopup: authModule.signInWithPopup,
         signOut: authModule.signOut,
         where: firestoreModule.where,
       };
@@ -505,31 +441,15 @@ async function initCloudAuth() {
   });
 }
 
-async function signInFirebaseWithGoogleToken(idToken) {
-  const services = await loadFirebaseServices();
-  if (!services) {
-    renderSyncSettings();
-    return;
-  }
-
-  try {
-    setCloudStatus("מתחבר לענן...", "מתבצע חיבור Firebase Auth.");
-    const credential = services.GoogleAuthProvider.credential(idToken);
-    const result = await services.signInWithCredential(services.auth, credential);
-    currentUser = {
-      ...currentUser,
-      firebaseUid: result.user.uid,
-      email: result.user.email || currentUser.email,
-      name: result.user.displayName || currentUser.name,
-      picture: result.user.photoURL || currentUser.picture,
-    };
-    saveAuthUser(currentUser);
-    renderAuth();
-    await connectCloudSync();
-  } catch (error) {
-    setCloudStatus("נשמר מקומית", `Firebase Auth נכשל: ${error.message}`);
-    showToast("התחברת לגוגל מקומית, אבל הסנכרון לענן עדיין לא פעיל");
-  }
+function userFromFirebase(firebaseUser) {
+  return {
+    id: `google:${firebaseUser.uid}`,
+    firebaseUid: firebaseUser.uid,
+    name: firebaseUser.displayName || firebaseUser.email || "משתמש Google",
+    email: firebaseUser.email || "",
+    picture: firebaseUser.photoURL || "",
+    provider: "google",
+  };
 }
 
 async function signOutFirebase() {
