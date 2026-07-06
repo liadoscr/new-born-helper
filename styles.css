@@ -1016,6 +1016,24 @@ p {
   justify-content: flex-start;
   color: var(--secondary);
   font-weight: 900;
+  min-height: 24px;
+  min-width: 11rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sync-line #syncStatus {
+  display: inline-block;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-with-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .live-dot {
@@ -1874,6 +1892,18 @@ body {
 @media (max-width: 520px) {
   .top-app-bar {
     padding-inline: 20px;
+  }
+
+  .partner-header {
+    align-items: flex-start;
+  }
+
+  .sync-line {
+    min-width: 9rem;
+  }
+
+  .sync-line #syncStatus {
+    max-width: 8.5rem;
   }
 
   .app-canvas {
