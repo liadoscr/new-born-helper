@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#121319" />
+    <meta name="theme-color" content="#f8f4ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#26211c" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="אפליקציית עזר להנקה, חיתולים ודשבורד בן זוג." />
     <title>NewBorn Helper - מעקב הנקה</title>
     <link rel="manifest" href="manifest.webmanifest" />
@@ -12,9 +13,22 @@
   </head>
   <body>
     <header class="top-app-bar">
-      <button class="top-icon" id="menuButton" type="button" aria-label="תפריט" aria-controls="appMenu" aria-expanded="false">☰</button>
-      <strong class="brand">NewBorn Helper</strong>
-      <button class="top-icon" id="installButton" type="button" aria-label="התקנה למסך הבית">⌂</button>
+      <div class="brand-lockup">
+        <button class="top-icon brand-baby" id="menuButton" type="button" aria-label="תפריט" aria-controls="appMenu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" stroke="currentColor" stroke-width="1.8"></path>
+            <path d="M9 13c.6.8 1.7 1.4 3 1.4s2.4-.6 3-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+            <circle cx="9" cy="10" r="1" fill="currentColor"></circle>
+            <circle cx="15" cy="10" r="1" fill="currentColor"></circle>
+            <path d="M12 3c-1 1-1 2.2 0 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+          </svg>
+        </button>
+        <div class="brand-copy">
+          <strong class="brand">NewBorn Helper</strong>
+          <span>מעקב רגוע, גם ב-3 בלילה</span>
+        </div>
+      </div>
+      <button class="top-icon install-icon" id="installButton" type="button" aria-label="התקנה למסך הבית">⌂</button>
     </header>
 
     <div class="menu-backdrop" id="menuBackdrop" hidden></div>
@@ -271,6 +285,21 @@
         </section>
       </section>
     </main>
+
+    <nav class="bottom-nav" aria-label="ניווט ראשי">
+      <button type="button" data-view-target="home">
+        <span aria-hidden="true">⌂</span>
+        בית
+      </button>
+      <button type="button" data-view-target="logs">
+        <span aria-hidden="true">▤</span>
+        יומן
+      </button>
+      <button type="button" data-view-target="settings">
+        <span aria-hidden="true">⚙</span>
+        הגדרות
+      </button>
+    </nav>
 
     <div class="toast" id="undoToast" role="status" aria-live="polite" hidden>
       <span id="undoText">נרשם</span>
