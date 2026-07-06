@@ -1332,7 +1332,7 @@ function addDiaper(type) {
 function render() {
   const active = getActiveFeeding();
   const latest = getLatestFeeding();
-  const latestStarted = latest ? new Date(latest.startedAt) : null;
+  const latestStarted = latest ? getFeedingIntervalBaseDate(latest) : null;
 
   renderFeeding(active, latest, latestStarted);
   renderDiapers();
@@ -1366,7 +1366,7 @@ function renderFeeding(active, latest, latestStarted) {
   } else {
     els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
     els.partnerElapsed.textContent = latestStarted ? timeSince(latestStarted) : "--";
-    els.timerHint.textContent = latestStarted ? `עברו ${timeSince(latestStarted)} מתחילת ההנקה האחרונה` : "מוכנה להתחיל";
+    els.timerHint.textContent = latestStarted ? `עברו ${timeSince(latestStarted)} מסיום ההאכלה האחרונה` : "מוכנה להתחיל";
     els.pauseButton.textContent = "גרעפס / עצירה";
     els.stopButton.textContent = "סיום הנקה";
     els.dessertButton.hidden = false;
@@ -1376,9 +1376,9 @@ function renderFeeding(active, latest, latestStarted) {
 
   if (latest) {
     const nextSide = nextStartSide(latest);
-    const nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
+    const nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + FEEDING_INTERVAL_MS);
     els.nextSideText.textContent = nextSide ? sideLabel(nextSide) : "אין נתונים";
-    els.lastFeedText.textContent = `הנקה אחרונה: ${feedingSummary(latest)} · ${formatTime(latest.startedAt)}`;
+    els.lastFeedText.textContent = `${isBottleFeeding(latest) ? "בקבוק אחרון" : "הנקה אחרונה"}: ${feedingSummary(latest)} · ${latest.endedAt ? "הסתיימה" : "התחילה"} ב-${formatTime(getFeedingIntervalBaseDate(latest))}`;
     els.nextFeedText.textContent = formatTime(nextFeed);
     els.nextFeedRelative.textContent = relativeDueText(nextFeed);
     renderPartnerStatus(nextFeed);
@@ -1403,7 +1403,7 @@ function scheduleNextFeedingNotification(nextFeed) {
   if (!nextFeed) {
     const latest = getLatestFeeding();
     if (!latest) return;
-    nextFeed = new Date(new Date(latest.startedAt).getTime() + FEEDING_INTERVAL_MS);
+    nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + FEEDING_INTERVAL_MS);
   }
 
   if (!notificationsEnabled() || Notification.permission !== "granted") return;
@@ -1785,6 +1785,10 @@ function getLatestFeeding() {
     state.feedings.filter((feeding) => feeding.startedAt),
     "startedAt",
   );
+}
+
+function getFeedingIntervalBaseDate(feeding) {
+  return new Date(feeding.endedAt || feeding.startedAt);
 }
 
 function getLatestByDate(items, field) {
