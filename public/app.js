@@ -26,6 +26,7 @@ const defaultState = {
   deletedEvents: [],
   sync: {
     partnerEmails: [],
+    declinedFamilyIds: [],
   },
   settings: {
     feedingIntervalHours: 3,
@@ -52,10 +53,12 @@ let cloudMemberEmails = [];
 let cloudWriteTimer = null;
 let cloudApplyingRemote = false;
 let cloudStatusText = "";
+let pendingFamilyInvitation = null;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
   activeTimer: document.querySelector("#activeTimer"),
+  acceptFamilyInviteButton: document.querySelector("#acceptFamilyInviteButton"),
   addManualButton: document.querySelector("#addManualButton"),
   bottleButton: document.querySelector("#bottleButton"),
   bottleSideStat: document.querySelector("#bottleSideStat"),
@@ -87,7 +90,10 @@ const els = {
   deleteEventId: document.querySelector("#deleteEventId"),
   deleteEventText: document.querySelector("#deleteEventText"),
   deleteEventType: document.querySelector("#deleteEventType"),
+  declineFamilyInviteButton: document.querySelector("#declineFamilyInviteButton"),
   exportButton: document.querySelector("#exportButton"),
+  familyInviteCard: document.querySelector("#familyInviteCard"),
+  familyInviteText: document.querySelector("#familyInviteText"),
   googleSignInButton: document.querySelector("#googleSignInButton"),
   historyList: document.querySelector("#historyList"),
   installButton: document.querySelector("#installButton"),
@@ -190,6 +196,8 @@ function init() {
   els.resetDataButton.addEventListener("click", openResetDialog);
   els.notificationButton.addEventListener("click", toggleNotifications);
   els.savePartnerEmailsButton.addEventListener("click", savePartnerEmails);
+  els.acceptFamilyInviteButton.addEventListener("click", acceptFamilyInvitation);
+  els.declineFamilyInviteButton.addEventListener("click", declineFamilyInvitation);
   els.entryTypeInput.addEventListener("change", renderEntryDialogFields);
   els.entrySideInput.addEventListener("change", renderEntryDialogFields);
   els.historyList.addEventListener("click", handleHistoryClick);
@@ -281,6 +289,7 @@ function normalizeState(value) {
   next.settings = { ...clone(defaultState.settings), ...(next.settings || {}) };
   next.sync = { ...clone(defaultState.sync), ...(next.sync || {}) };
   next.sync.partnerEmails = Array.isArray(next.sync.partnerEmails) ? next.sync.partnerEmails : [];
+  next.sync.declinedFamilyIds = Array.isArray(next.sync.declinedFamilyIds) ? next.sync.declinedFamilyIds : [];
   return next;
 }
 
@@ -292,6 +301,7 @@ function saveState() {
 function switchUser(user) {
   saveState();
   stopCloudSync();
+  pendingFamilyInvitation = null;
   currentUser = user;
   saveAuthUser(user);
   state = loadState(user);
@@ -565,11 +575,11 @@ async function connectCloudSync() {
   if (memberEmails.length === 1) {
     const discoveredFamily = await findExistingFamilyForCurrentUser(services);
     if (discoveredFamily) {
-      memberEmails = discoveredFamily.memberEmails;
-      familyId = discoveredFamily.id;
-      state.sync.partnerEmails = memberEmails.filter((email) => email !== normalizeEmail(currentUser.email));
-      localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+      pendingFamilyInvitation = discoveredFamily;
+      setCloudStatus("ממתין לאישור משפחה", familyInviteLabel(discoveredFamily));
       renderSyncSettings();
+      showView("sync");
+      return;
     }
   }
 
@@ -736,8 +746,11 @@ async function findExistingFamilyForCurrentUser(services) {
       const candidate = {
         id: docSnapshot.id,
         memberEmails,
+        invitedByEmail: data.updatedByEmail || "",
         updatedAt: new Date(data.updatedAt || 0).getTime(),
       };
+
+      if (state.sync.declinedFamilyIds.includes(candidate.id)) return;
 
       if (!best || candidate.updatedAt > best.updatedAt) best = candidate;
     });
@@ -750,6 +763,10 @@ async function findExistingFamilyForCurrentUser(services) {
 
 function normalizeEmailList(emails) {
   return [...new Set((emails || []).map(normalizeEmail).filter(Boolean))].sort();
+}
+
+function normalizeFamilyIds(ids) {
+  return [...new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean))];
 }
 
 function normalizeEmail(email) {
@@ -907,6 +924,7 @@ function renderAuth() {
 
 function renderSyncSettings() {
   els.partnerEmailsInput.value = state.sync.partnerEmails.join(", ");
+  renderFamilyInvitation();
   const hasCloudConfig = hasFirebaseConfig();
   if (!currentUser.email) {
     els.syncConfigStatus.textContent = "יש להתחבר עם Google לפני סנכרון זוגי.";
@@ -921,11 +939,53 @@ function renderSyncSettings() {
   }
 }
 
+function renderFamilyInvitation() {
+  if (!els.familyInviteCard) return;
+
+  const invitation = pendingFamilyInvitation;
+  els.familyInviteCard.hidden = !invitation;
+  if (!invitation) return;
+
+  els.familyInviteText.textContent = familyInviteLabel(invitation);
+}
+
+function familyInviteLabel(invitation) {
+  const currentEmail = normalizeEmail(currentUser.email);
+  const partners = normalizeEmailList(invitation.memberEmails || []).filter((email) => email !== currentEmail);
+  const from = invitation.invitedByEmail ? `הזמנה מ-${invitation.invitedByEmail}` : "נמצאה הזמנה ליומן משותף";
+  return partners.length ? `${from}. היומן ישותף עם ${partners.join(", ")}.` : from;
+}
+
+function acceptFamilyInvitation() {
+  if (!pendingFamilyInvitation) return;
+
+  const invitation = pendingFamilyInvitation;
+  state.sync.partnerEmails = normalizeEmailList(invitation.memberEmails).filter((email) => email !== normalizeEmail(currentUser.email));
+  state.sync.declinedFamilyIds = state.sync.declinedFamilyIds.filter((id) => id !== invitation.id);
+  pendingFamilyInvitation = null;
+  saveState();
+  renderSyncSettings();
+  connectCloudSync();
+  showToast("הצטרפת למשפחה");
+}
+
+function declineFamilyInvitation() {
+  if (!pendingFamilyInvitation) return;
+
+  state.sync.declinedFamilyIds = normalizeFamilyIds([...state.sync.declinedFamilyIds, pendingFamilyInvitation.id]);
+  pendingFamilyInvitation = null;
+  saveState();
+  renderSyncSettings();
+  setCloudStatus("נשמר במכשיר", "ההזמנה נדחתה. אפשר להצטרף בעתיד על ידי שמירת אימייל בן/בת הזוג.");
+  showToast("ההזמנה נדחתה");
+}
+
 function savePartnerEmails() {
   state.sync.partnerEmails = els.partnerEmailsInput.value
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
+  pendingFamilyInvitation = null;
   saveState();
   renderSyncSettings();
   connectCloudSync();
