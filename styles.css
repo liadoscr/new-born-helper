@@ -29,11 +29,16 @@
 }
 
 html {
+  width: 100%;
+  max-width: 100%;
   min-height: 100%;
+  overflow-x: hidden;
   background: var(--surface);
 }
 
 body {
+  width: 100%;
+  max-width: 100%;
   margin: 0;
   min-height: 100vh;
   overflow-x: hidden;
@@ -497,13 +502,17 @@ p {
 
 .app-canvas {
   width: min(100%, 640px);
+  max-width: 100%;
   min-height: 100vh;
   margin: 0 auto;
   padding: 100px 20px max(32px, env(safe-area-inset-bottom));
+  overflow-x: clip;
 }
 
 .view {
   display: none;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .view.is-active {
@@ -518,6 +527,8 @@ p {
 .live-card,
 .action-card,
 .resource-card {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(198, 197, 213, 0.12);
   border-radius: 24px;
   background: rgba(41, 41, 48, 0.56);
@@ -928,6 +939,7 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
   min-height: 72px;
   padding: 14px 0;
   border-top: 1px solid rgba(69, 70, 83, 0.45);
@@ -942,6 +954,7 @@ p {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .history-icon {
@@ -959,16 +972,24 @@ p {
 .history-meta {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .history-main strong {
   font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.history-main span,
+.history-meta span {
+  overflow-wrap: anywhere;
 }
 
 .history-meta {
   justify-items: end;
   text-align: left;
   font-size: 0.95rem;
+  max-width: 44%;
 }
 
 .history-edit {
@@ -1217,6 +1238,17 @@ p {
   .active-controls,
   .dialog-actions {
     grid-template-columns: 1fr;
+  }
+
+  .history-list li {
+    display: grid;
+    align-items: start;
+  }
+
+  .history-meta {
+    justify-items: start;
+    max-width: 100%;
+    text-align: right;
   }
 
   .dialog-actions {

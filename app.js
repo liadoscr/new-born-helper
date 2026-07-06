@@ -90,6 +90,7 @@ const els = {
   milkDialog: document.querySelector("#milkDialog"),
   milkDialogTitle: document.querySelector("#milkDialogTitle"),
   milkMode: document.querySelector("#milkMode"),
+  milkRuleWarning: document.querySelector("#milkRuleWarning"),
   milkTargetId: document.querySelector("#milkTargetId"),
   milkTimeInput: document.querySelector("#milkTimeInput"),
   milkTimeRow: document.querySelector("#milkTimeRow"),
@@ -166,6 +167,8 @@ function init() {
   els.addManualButton.addEventListener("click", () => openEntryDialog());
   els.installButton.addEventListener("click", installApp);
   els.pumpButton.addEventListener("click", () => openMilkDialog("pump"));
+  els.milkAmountInput.addEventListener("input", renderMilkRuleWarning);
+  els.milkUnitInput.addEventListener("change", renderMilkRuleWarning);
   els.pumpSelectInput.addEventListener("change", renderPumpSelectionWarning);
   els.googleSignInButton.addEventListener("click", signInWithGoogle);
   els.signOutButton.addEventListener("click", signOut);
@@ -598,6 +601,30 @@ function renderPumpSelectionWarning() {
   els.pumpRuleWarning.innerHTML = warnings.map((warning) => `<p>${warning}</p>`).join("");
 }
 
+function renderMilkRuleWarning() {
+  if (els.milkMode.value !== "bottle-finish") {
+    els.milkRuleWarning.hidden = true;
+    els.milkRuleWarning.innerHTML = "";
+    return;
+  }
+
+  const feeding = state.feedings.find((item) => item.id === els.milkTargetId.value);
+  const pump = findEvent("pump", feeding?.pumpId || pendingBottlePumpId);
+  const warnings = [];
+  const remaining = pump ? formatPumpRemaining(pump, feeding?.id || "") : "";
+  if (remaining) warnings.push(`נשאר בשאיבה הזו: ${remaining}`);
+  const validationError = validateBottleAmountAgainstPump(
+    pump,
+    normalizeAmount(els.milkAmountInput.value),
+    els.milkUnitInput.value || "ml",
+    feeding?.id || "",
+  );
+  if (validationError) warnings.push(validationError);
+
+  els.milkRuleWarning.hidden = warnings.length === 0;
+  els.milkRuleWarning.innerHTML = warnings.map((warning) => `<p>${warning}</p>`).join("");
+}
+
 function stopFeeding() {
   const active = getActiveFeeding();
   if (!active) return;
@@ -688,6 +715,7 @@ function openMilkDialog(mode, feeding = null) {
   els.milkTimeRow.hidden = mode === "bottle-finish";
   const roomOption = els.pumpStorageGroup.querySelector('input[value="room"]');
   if (roomOption) roomOption.checked = true;
+  renderMilkRuleWarning();
 
   if (typeof els.milkDialog.showModal === "function") {
     els.milkDialog.showModal();
@@ -703,6 +731,18 @@ function saveMilkDialog() {
   if (mode === "bottle-finish") {
     const feeding = state.feedings.find((item) => item.id === els.milkTargetId.value);
     if (feeding) {
+      const pump = findEvent("pump", feeding.pumpId || pendingBottlePumpId);
+      const validationError = validateBottleAmountAgainstPump(pump, amount, unit, feeding.id);
+      if (validationError) {
+        showToast(validationError);
+        setTimeout(() => {
+          openMilkDialog("bottle-finish", feeding);
+          els.milkAmountInput.value = amount;
+          els.milkUnitInput.value = unit;
+          renderMilkRuleWarning();
+        }, 0);
+        return;
+      }
       feeding.amountValue = amount;
       feeding.amountUnit = unit;
       if (!feeding.pumpId && pendingBottlePumpId) feeding.pumpId = pendingBottlePumpId;
@@ -897,9 +937,9 @@ function sendNextFeedingNotification() {
 }
 
 function renderSideButtons(active, latest) {
-  const hasPump = getPumpOptions().length > 0;
-  els.bottleButton.disabled = !hasPump && !active;
-  els.bottleButton.setAttribute("aria-disabled", String(!hasPump && !active));
+  const hasAvailablePump = getPumpOptions().length > 0;
+  els.bottleButton.disabled = !hasAvailablePump && !active;
+  els.bottleButton.setAttribute("aria-disabled", String(!hasAvailablePump && !active));
 
   els.sideButtons.forEach((button) => {
     const side = button.dataset.side;
@@ -916,7 +956,7 @@ function renderSideButtons(active, latest) {
 
   els.rightSideStat.textContent = sideStatusText("right", active, latest);
   els.leftSideStat.textContent = sideStatusText("left", active, latest);
-  els.bottleSideStat.textContent = hasPump ? sideStatusText("bottle", active, latest) : "צריך שאיבה";
+  els.bottleSideStat.textContent = hasAvailablePump ? sideStatusText("bottle", active, latest) : "אין שאיבה זמינה";
 }
 
 function sideStatusText(side, active, latest) {
@@ -1240,7 +1280,9 @@ function isPumpExpired(pump) {
 }
 
 function getPumpOptions() {
-  return [...state.pumps].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return [...state.pumps]
+    .filter((pump) => isPumpAvailable(pump))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 function createPumpCode() {
@@ -1257,6 +1299,8 @@ function pumpOptionLabel(pump) {
   const parts = [pumpCode(pump), formatDateOnly(pump.createdAt), formatTime(pump.createdAt)];
   const amount = formatAmount(pump);
   if (amount) parts.push(amount);
+  const remaining = formatPumpRemaining(pump);
+  if (remaining) parts.push(`נשאר ${remaining}`);
   parts.push(pump.storage === "fridge" ? "במקרר" : "בחוץ");
   return parts.join(" · ");
 }
@@ -1268,6 +1312,64 @@ function evaluatePumpWarnings(pump) {
     warnings.push("אזהרה: השאיבה הזו סומנה כחלב שהיה בחוץ ועברו יותר מ-4 שעות.");
   }
   return warnings;
+}
+
+function validateBottleAmountAgainstPump(pump, amount, unit, excludeFeedingId = "") {
+  if (!pump) return "צריך לבחור שאיבה לבקבוק.";
+  const amountNumber = Number(String(amount || "").replace(",", "."));
+  if (!amount || !Number.isFinite(amountNumber)) return "";
+  if (amountUnit(pump) !== unit) {
+    return `היחידה חייבת להתאים לשאיבה: ${amountUnitLabel(amountUnit(pump))}.`;
+  }
+  const remaining = getPumpRemaining(pump, excludeFeedingId);
+  if (remaining !== null && amountNumber > remaining) {
+    return `אי אפשר לרשום יותר מהיתרה בשאיבה הזו: ${formatPumpRemaining(pump, excludeFeedingId)}.`;
+  }
+  return "";
+}
+
+function isPumpAvailable(pump) {
+  const remaining = getPumpRemaining(pump);
+  return remaining === null || remaining > 0;
+}
+
+function getPumpRemaining(pump, excludeFeedingId = "") {
+  const total = numericAmount(pump);
+  if (total === null) return null;
+  return Math.max(0, total - getPumpUsedAmount(pump, excludeFeedingId));
+}
+
+function getPumpUsedAmount(pump, excludeFeedingId = "") {
+  const unit = amountUnit(pump);
+  const feedingUsed = state.feedings
+    .filter((feeding) => isBottleFeeding(feeding) && feeding.pumpId === pump.id && feeding.id !== excludeFeedingId)
+    .reduce((sum, feeding) => sum + comparableAmount(feeding, unit), 0);
+  const standaloneBottleUsed = state.bottles
+    .filter((bottle) => bottle.pumpId === pump.id)
+    .reduce((sum, bottle) => sum + comparableAmount(bottle, unit), 0);
+  return feedingUsed + standaloneBottleUsed;
+}
+
+function numericAmount(item) {
+  const value = amountValue(item).replace(",", ".");
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function comparableAmount(item, unit) {
+  if (amountUnit(item) !== unit) return 0;
+  return numericAmount(item) ?? 0;
+}
+
+function formatPumpRemaining(pump, excludeFeedingId = "") {
+  const remaining = getPumpRemaining(pump, excludeFeedingId);
+  if (remaining === null) return "";
+  return `${formatNumber(remaining)} ${amountUnitLabel(amountUnit(pump))}`;
+}
+
+function formatNumber(value) {
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100);
 }
 
 function normalizeAmount(value) {
