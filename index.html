@@ -279,7 +279,7 @@
 
     <dialog class="sleepy-dialog" id="sleepyDialog">
       <form method="dialog">
-        <h2>היא עדיין ערה?</h2>
+        <h2 tabindex="-1" data-dialog-focus autofocus>היא עדיין ערה?</h2>
         <p>אולי כדאי ללטף לה את כפות הרגליים, להרים לגרעפס או להחליף חיתול קטן.</p>
         <button class="finish-action full-width" value="ok">הבנתי</button>
       </form>
@@ -287,7 +287,7 @@
 
     <dialog class="sleepy-dialog" id="resetDialog">
       <form method="dialog">
-        <h2>לאפס את הנתונים?</h2>
+        <h2 tabindex="-1" data-dialog-focus autofocus>לאפס את הנתונים?</h2>
         <p>הפעולה תמחק את ההנקות והחיתולים של המשתמש הנוכחי מהמכשיר הזה. אי אפשר לבטל אחרי האישור.</p>
         <div class="dialog-actions">
           <button class="ghost-action full-width" value="cancel">ביטול</button>
@@ -300,7 +300,7 @@
       <form method="dialog">
         <input id="deleteEventType" type="hidden" />
         <input id="deleteEventId" type="hidden" />
-        <h2>למחוק מהיומן?</h2>
+        <h2 tabindex="-1" data-dialog-focus autofocus>למחוק מהיומן?</h2>
         <p id="deleteEventText">הפעולה תימחק מהיומן.</p>
         <div class="dialog-actions">
           <button class="ghost-action full-width" value="cancel">ביטול</button>
@@ -313,7 +313,7 @@
       <form method="dialog">
         <input id="milkMode" type="hidden" />
         <input id="milkTargetId" type="hidden" />
-        <h2 id="milkDialogTitle">רישום חלב</h2>
+        <h2 id="milkDialogTitle" tabindex="-1" data-dialog-focus autofocus>רישום חלב</h2>
         <label class="field-row milk-amount-row">
           <span>כמות</span>
           <input id="milkAmountInput" type="text" inputmode="decimal" placeholder="לדוגמה 60" />
@@ -350,7 +350,7 @@
 
     <dialog class="sleepy-dialog" id="pumpSelectDialog">
       <form method="dialog">
-        <h2>בחירת שאיבה לבקבוק</h2>
+        <h2 tabindex="-1" data-dialog-focus autofocus>בחירת שאיבה לבקבוק</h2>
         <p>בחרי מאיזו שאיבה הבקבוק הזה מגיע.</p>
         <label class="field-row">
           <span>שאיבה</span>
@@ -367,7 +367,7 @@
     <dialog class="sleepy-dialog" id="entryDialog">
       <form method="dialog">
         <input id="entryIdInput" type="hidden" />
-        <h2 id="entryDialogTitle">הוספה בדיעבד</h2>
+        <h2 id="entryDialogTitle" tabindex="-1" data-dialog-focus autofocus>הוספה בדיעבד</h2>
         <label class="field-row">
           <span>סוג פעולה</span>
           <select id="entryTypeInput">

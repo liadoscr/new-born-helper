@@ -389,10 +389,20 @@ function signOut() {
   showToast("התנתקת. עברת למצב אורח");
 }
 
+function openModal(dialog) {
+  if (typeof dialog.showModal !== "function") return false;
+
+  dialog.showModal();
+  requestAnimationFrame(() => {
+    const focusTarget = dialog.querySelector("[data-dialog-focus]") || dialog;
+    focusTarget.focus({ preventScroll: true });
+  });
+  return true;
+}
+
 function openResetDialog() {
   closeMenu();
-  if (typeof els.resetDialog.showModal === "function") {
-    els.resetDialog.showModal();
+  if (openModal(els.resetDialog)) {
     return;
   }
 
@@ -589,9 +599,7 @@ function openPumpSelectDialog() {
   els.pumpSelectInput.value = pumps[0].id;
   renderPumpSelectionWarning();
 
-  if (typeof els.pumpSelectDialog.showModal === "function") {
-    els.pumpSelectDialog.showModal();
-  }
+  openModal(els.pumpSelectDialog);
 }
 
 function startBottleFromSelectedPump() {
@@ -724,9 +732,7 @@ function openMilkDialog(mode, feeding = null) {
   if (roomOption) roomOption.checked = true;
   renderMilkRuleWarning();
 
-  if (typeof els.milkDialog.showModal === "function") {
-    els.milkDialog.showModal();
-  }
+  openModal(els.milkDialog);
 }
 
 function saveMilkDialog() {
@@ -1101,8 +1107,7 @@ function openDeleteDialog(type, id) {
   els.deleteEventId.value = id;
   els.deleteEventText.textContent = `למחוק את ${label} מהיומן?`;
 
-  if (typeof els.deleteDialog.showModal === "function") {
-    els.deleteDialog.showModal();
+  if (openModal(els.deleteDialog)) {
     return;
   }
 
@@ -1161,9 +1166,7 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryStorageInput.value = item?.storage || "room";
   renderEntryDialogFields();
 
-  if (typeof els.entryDialog.showModal === "function") {
-    els.entryDialog.showModal();
-  }
+  openModal(els.entryDialog);
 }
 
 function renderEntryDialogFields() {
@@ -1262,9 +1265,7 @@ function maybeShowSleepyReminder(active) {
     active.sleepyReminderShownAt = new Date().toISOString();
     saveState();
     vibrate([80, 80, 80]);
-    if (typeof els.sleepyDialog.showModal === "function") {
-      els.sleepyDialog.showModal();
-    }
+    openModal(els.sleepyDialog);
   }
 }
 
