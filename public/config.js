@@ -3,7 +3,7 @@ window.LULLABY_LOG_CONFIG = {
   googleClientId: "286863244298-spnqmcbtfs3t3rmm1a9t5skio4048loo.apps.googleusercontent.com",
   firebaseConfig: {
     apiKey: "AIzaSyB5O0BnjRp7ZsW7qqK5aJQn4gMPCCbg-Lg",
-    authDomain: "newborn-helper-eb830.firebaseapp.com",
+    authDomain: "new-born-helper.vercel.app",
     projectId: "newborn-helper-eb830",
     storageBucket: "newborn-helper-eb830.firebasestorage.app",
     messagingSenderId: "378396944885",
