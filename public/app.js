@@ -7,6 +7,9 @@ const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
 const AUTH_STORAGE_KEY = "lullaby-log-auth-user-v1";
 const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
 const GOOGLE_SCRIPT_URL = "https://accounts.google.com/gsi/client";
+const FIREBASE_SDK_VERSION = "12.15.0";
+const FIREBASE_FAMILY_COLLECTION = "families";
+const CLOUD_WRITE_DEBOUNCE_MS = 900;
 
 const GUEST_USER = {
   id: "guest",
@@ -21,6 +24,7 @@ const defaultState = {
   diapers: [],
   bottles: [],
   pumps: [],
+  deletedEvents: [],
   sync: {
     partnerEmails: [],
   },
@@ -41,6 +45,15 @@ let googleReady = false;
 let nextFeedingNotificationTimer = null;
 let scheduledNotificationAt = "";
 let pendingBottlePumpId = "";
+let firebaseServices = null;
+let firebaseInitPromise = null;
+let firebaseAuthUnsubscribe = null;
+let cloudUnsubscribe = null;
+let cloudDocRef = null;
+let cloudMemberEmails = [];
+let cloudWriteTimer = null;
+let cloudApplyingRemote = false;
+let cloudStatusText = "";
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -214,6 +227,7 @@ function init() {
   renderNotificationState();
   renderSyncSettings();
   initGoogleAuth();
+  initCloudAuth();
   render();
   setInterval(render, 1000);
 }
@@ -265,6 +279,7 @@ function normalizeState(value) {
   next.diapers = Array.isArray(next.diapers) ? next.diapers : [];
   next.bottles = Array.isArray(next.bottles) ? next.bottles : [];
   next.pumps = Array.isArray(next.pumps) ? next.pumps : [];
+  next.deletedEvents = Array.isArray(next.deletedEvents) ? next.deletedEvents : [];
   next.settings = { ...clone(defaultState.settings), ...(next.settings || {}) };
   next.sync = { ...clone(defaultState.sync), ...(next.sync || {}) };
   next.sync.partnerEmails = Array.isArray(next.sync.partnerEmails) ? next.sync.partnerEmails : [];
@@ -273,10 +288,12 @@ function normalizeState(value) {
 
 function saveState() {
   localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+  if (!cloudApplyingRemote) scheduleCloudWrite();
 }
 
 function switchUser(user) {
   saveState();
+  stopCloudSync();
   currentUser = user;
   saveAuthUser(user);
   state = loadState(user);
@@ -286,6 +303,7 @@ function switchUser(user) {
   renderNotificationState();
   renderSyncSettings();
   render();
+  connectCloudSync();
 }
 
 function initGoogleAuth() {
@@ -355,7 +373,7 @@ function signInWithGoogle() {
   });
 }
 
-function handleGoogleCredential(response) {
+async function handleGoogleCredential(response) {
   const profile = parseJwt(response.credential);
   const user = {
     id: `google:${profile.sub}`,
@@ -367,6 +385,7 @@ function handleGoogleCredential(response) {
   switchUser(user);
   closeMenu();
   showToast(`מחובר כ-${user.name}`);
+  await signInFirebaseWithGoogleToken(response.credential);
 }
 
 function parseJwt(token) {
@@ -381,12 +400,451 @@ function parseJwt(token) {
   return JSON.parse(json);
 }
 
-function signOut() {
+async function signOut() {
   if (window.google?.accounts?.id) {
     window.google.accounts.id.disableAutoSelect();
   }
+  await signOutFirebase();
+  stopCloudSync();
   switchUser(GUEST_USER);
   showToast("התנתקת. עברת למצב אורח");
+}
+
+function hasFirebaseConfig() {
+  const config = window.LULLABY_LOG_CONFIG?.firebaseConfig;
+  return Boolean(config?.apiKey && config?.authDomain && config?.projectId && config?.appId);
+}
+
+function getFirebaseConfig() {
+  return hasFirebaseConfig() ? window.LULLABY_LOG_CONFIG.firebaseConfig : null;
+}
+
+async function loadFirebaseServices() {
+  if (firebaseServices) return firebaseServices;
+  if (firebaseInitPromise) return firebaseInitPromise;
+
+  const firebaseConfig = getFirebaseConfig();
+  if (!firebaseConfig) return null;
+
+  firebaseInitPromise = Promise.all([
+    import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js`),
+    import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js`),
+    import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-firestore.js`),
+  ])
+    .then(([appModule, authModule, firestoreModule]) => {
+      const app = appModule.initializeApp(firebaseConfig);
+      const auth = authModule.getAuth(app);
+      let db;
+
+      try {
+        db = firestoreModule.initializeFirestore(app, {
+          localCache: firestoreModule.persistentLocalCache({
+            tabManager: firestoreModule.persistentMultipleTabManager(),
+          }),
+        });
+      } catch {
+        db = firestoreModule.getFirestore(app);
+      }
+
+      firebaseServices = {
+        auth,
+        db,
+        GoogleAuthProvider: authModule.GoogleAuthProvider,
+        arrayUnion: firestoreModule.arrayUnion,
+        collection: firestoreModule.collection,
+        doc: firestoreModule.doc,
+        getDocs: firestoreModule.getDocs,
+        limit: firestoreModule.limit,
+        onAuthStateChanged: authModule.onAuthStateChanged,
+        onSnapshot: firestoreModule.onSnapshot,
+        query: firestoreModule.query,
+        serverTimestamp: firestoreModule.serverTimestamp,
+        setDoc: firestoreModule.setDoc,
+        signInWithCredential: authModule.signInWithCredential,
+        signOut: authModule.signOut,
+        where: firestoreModule.where,
+      };
+
+      return firebaseServices;
+    })
+    .catch((error) => {
+      firebaseInitPromise = null;
+      setCloudStatus("נשמר מקומית", `טעינת Firebase נכשלה: ${error.message}`);
+      return null;
+    });
+
+  return firebaseInitPromise;
+}
+
+async function initCloudAuth() {
+  const services = await loadFirebaseServices();
+  if (!services || firebaseAuthUnsubscribe) {
+    renderSyncSettings();
+    return;
+  }
+
+  firebaseAuthUnsubscribe = services.onAuthStateChanged(services.auth, (firebaseUser) => {
+    if (!firebaseUser) {
+      stopCloudSync();
+      renderSyncSettings();
+      return;
+    }
+
+    if (currentUser.provider !== "guest") {
+      currentUser = {
+        ...currentUser,
+        firebaseUid: firebaseUser.uid,
+        email: firebaseUser.email || currentUser.email,
+        name: firebaseUser.displayName || currentUser.name,
+        picture: firebaseUser.photoURL || currentUser.picture,
+      };
+      saveAuthUser(currentUser);
+      renderAuth();
+      connectCloudSync();
+    }
+  });
+}
+
+async function signInFirebaseWithGoogleToken(idToken) {
+  const services = await loadFirebaseServices();
+  if (!services) {
+    renderSyncSettings();
+    return;
+  }
+
+  try {
+    setCloudStatus("מתחבר לענן...", "מתבצע חיבור Firebase Auth.");
+    const credential = services.GoogleAuthProvider.credential(idToken);
+    const result = await services.signInWithCredential(services.auth, credential);
+    currentUser = {
+      ...currentUser,
+      firebaseUid: result.user.uid,
+      email: result.user.email || currentUser.email,
+      name: result.user.displayName || currentUser.name,
+      picture: result.user.photoURL || currentUser.picture,
+    };
+    saveAuthUser(currentUser);
+    renderAuth();
+    await connectCloudSync();
+  } catch (error) {
+    setCloudStatus("נשמר מקומית", `Firebase Auth נכשל: ${error.message}`);
+    showToast("התחברת לגוגל מקומית, אבל הסנכרון לענן עדיין לא פעיל");
+  }
+}
+
+async function signOutFirebase() {
+  const services = await loadFirebaseServices();
+  if (!services) return;
+
+  try {
+    await services.signOut(services.auth);
+  } catch {
+    // Local sign-out should still continue even if Firebase is temporarily unavailable.
+  }
+}
+
+function setCloudStatus(status, detail = "") {
+  cloudStatusText = status;
+  if (els.syncStatus) els.syncStatus.textContent = status;
+  if (detail && els.syncConfigStatus) els.syncConfigStatus.textContent = detail;
+}
+
+function stopCloudSync() {
+  clearTimeout(cloudWriteTimer);
+  cloudWriteTimer = null;
+
+  if (cloudUnsubscribe) {
+    cloudUnsubscribe();
+    cloudUnsubscribe = null;
+  }
+
+  cloudDocRef = null;
+  cloudMemberEmails = [];
+  cloudApplyingRemote = false;
+  cloudStatusText = "";
+}
+
+async function connectCloudSync() {
+  clearTimeout(cloudWriteTimer);
+
+  if (currentUser.provider === "guest" || !currentUser.email) {
+    stopCloudSync();
+    return;
+  }
+
+  const services = await loadFirebaseServices();
+  if (!services) {
+    renderSyncSettings();
+    return;
+  }
+
+  if (!services.auth.currentUser) {
+    setCloudStatus("נשמר מקומית", "צריך להתחבר שוב עם Google כדי להפעיל סנכרון ענן.");
+    return;
+  }
+
+  let memberEmails = getCloudMemberEmails();
+  let familyId = await createFamilyId(memberEmails);
+
+  if (memberEmails.length === 1) {
+    const discoveredFamily = await findExistingFamilyForCurrentUser(services);
+    if (discoveredFamily) {
+      memberEmails = discoveredFamily.memberEmails;
+      familyId = discoveredFamily.id;
+      state.sync.partnerEmails = memberEmails.filter((email) => email !== normalizeEmail(currentUser.email));
+      localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+      renderSyncSettings();
+    }
+  }
+
+  const nextDocRef = services.doc(services.db, FIREBASE_FAMILY_COLLECTION, familyId);
+
+  if (cloudDocRef && cloudDocRef.path === nextDocRef.path && cloudUnsubscribe) {
+    cloudMemberEmails = memberEmails;
+    scheduleCloudWrite(0);
+    return;
+  }
+
+  stopCloudSync();
+  cloudDocRef = nextDocRef;
+  cloudMemberEmails = memberEmails;
+  setCloudStatus("מתחבר לענן...", "פותח סנכרון בזמן אמת מול Firestore.");
+
+  cloudUnsubscribe = services.onSnapshot(
+    cloudDocRef,
+    { includeMetadataChanges: true },
+    (snapshot) => handleCloudSnapshot(snapshot),
+    (error) => {
+      stopCloudSync();
+      setCloudStatus("נשמר מקומית", `שגיאת סנכרון Firestore: ${error.message}`);
+    },
+  );
+}
+
+function scheduleCloudWrite(delay = CLOUD_WRITE_DEBOUNCE_MS) {
+  if (cloudApplyingRemote || !cloudDocRef || currentUser.provider === "guest") return;
+
+  clearTimeout(cloudWriteTimer);
+  cloudWriteTimer = setTimeout(() => {
+    writeCloudState().catch((error) => {
+      setCloudStatus("שגיאת סנכרון", `לא הצלחתי לשמור בענן: ${error.message}`);
+    });
+  }, delay);
+}
+
+async function writeCloudState() {
+  if (!cloudDocRef || cloudApplyingRemote) return;
+
+  const services = await loadFirebaseServices();
+  const firebaseUser = services?.auth.currentUser;
+  if (!services || !firebaseUser) return;
+
+  const memberEmails = getCloudMemberEmails();
+  cloudMemberEmails = memberEmails;
+  setCloudStatus("מעלה לענן...", "שומר את היומן המשותף.");
+
+  await services.setDoc(
+    cloudDocRef,
+    {
+      app: "newborn-helper",
+      schemaVersion: 2,
+      memberEmails,
+      memberUids: services.arrayUnion(firebaseUser.uid),
+      state: sanitizeStateForCloud(state),
+      updatedAt: new Date().toISOString(),
+      updatedByEmail: currentUser.email || "",
+      updatedByUid: firebaseUser.uid,
+      serverUpdatedAt: services.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  setCloudStatus("מסונכרן בענן", partnerSyncLabel(memberEmails));
+}
+
+function handleCloudSnapshot(snapshot) {
+  if (!cloudDocRef) return;
+
+  if (!snapshot.exists()) {
+    scheduleCloudWrite(0);
+    return;
+  }
+
+  const data = snapshot.data() || {};
+  const remoteState = normalizeState(data.state || {});
+  const memberEmails = normalizeEmailList(data.memberEmails || cloudMemberEmails);
+  if (memberEmails.length) {
+    cloudMemberEmails = memberEmails;
+    remoteState.sync.partnerEmails = memberEmails.filter((email) => email !== normalizeEmail(currentUser.email));
+  }
+
+  const merged = mergeStates(state, remoteState);
+  const localChanged = serializeStateForSync(merged) !== serializeStateForSync(state);
+  const remoteChanged = serializeStateForSync(merged) !== serializeStateForSync(remoteState);
+
+  if (localChanged) {
+    cloudApplyingRemote = true;
+    state = merged;
+    localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+    cloudApplyingRemote = false;
+    renderAuth();
+    renderNotificationState();
+    renderSyncSettings();
+    render();
+  }
+
+  if (remoteChanged && !snapshot.metadata.hasPendingWrites) {
+    scheduleCloudWrite(150);
+    return;
+  }
+
+  setCloudStatus(
+    snapshot.metadata.hasPendingWrites ? "מסנכרן..." : "מסונכרן בענן",
+    partnerSyncLabel(cloudMemberEmails),
+  );
+}
+
+function getCloudMemberEmails() {
+  return normalizeEmailList([currentUser.email, ...state.sync.partnerEmails]);
+}
+
+async function findExistingFamilyForCurrentUser(services) {
+  const email = normalizeEmail(currentUser.email);
+  if (!email) return null;
+
+  try {
+    const familiesRef = services.collection(services.db, FIREBASE_FAMILY_COLLECTION);
+    const familiesQuery = services.query(familiesRef, services.where("memberEmails", "array-contains", email), services.limit(5));
+    const snapshot = await services.getDocs(familiesQuery);
+    let best = null;
+
+    snapshot.forEach((docSnapshot) => {
+      const data = docSnapshot.data() || {};
+      const memberEmails = normalizeEmailList(data.memberEmails || []);
+      if (memberEmails.length < 2) return;
+
+      const candidate = {
+        id: docSnapshot.id,
+        memberEmails,
+        updatedAt: new Date(data.updatedAt || 0).getTime(),
+      };
+
+      if (!best || candidate.updatedAt > best.updatedAt) best = candidate;
+    });
+
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeEmailList(emails) {
+  return [...new Set((emails || []).map(normalizeEmail).filter(Boolean))].sort();
+}
+
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+async function createFamilyId(memberEmails) {
+  const source = memberEmails.join("|");
+  if (crypto.subtle) {
+    const buffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+    return `family_${Array.from(new Uint8Array(buffer))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, 40)}`;
+  }
+
+  return `family_${btoa(source).replace(/[^a-z0-9]/gi, "").slice(0, 80)}`;
+}
+
+function sanitizeStateForCloud(value) {
+  return normalizeState(clone(value));
+}
+
+function serializeStateForSync(value) {
+  return JSON.stringify(sanitizeStateForCloud(value));
+}
+
+function partnerSyncLabel(memberEmails) {
+  const partners = memberEmails.filter((email) => email !== normalizeEmail(currentUser.email));
+  return partners.length ? `סנכרון פעיל עם ${partners.join(", ")}` : "סנכרון ענן אישי פעיל. הוסף אימייל בן/בת זוג לשיתוף.";
+}
+
+function mergeStates(localState, remoteState) {
+  const local = normalizeState(localState);
+  const remote = normalizeState(remoteState);
+  const deletedEvents = mergeDeletedEvents(local.deletedEvents, remote.deletedEvents);
+  const deletedLookup = createDeletedLookup(deletedEvents);
+  const partnerEmails = normalizeEmailList([
+    ...local.sync.partnerEmails,
+    ...remote.sync.partnerEmails,
+  ]).filter((email) => email !== normalizeEmail(currentUser.email));
+
+  return normalizeState({
+    ...clone(defaultState),
+    settings: { ...clone(defaultState.settings), ...remote.settings, ...local.settings },
+    sync: {
+      ...clone(defaultState.sync),
+      ...remote.sync,
+      ...local.sync,
+      partnerEmails,
+    },
+    deletedEvents,
+    feedings: mergeCollection(local.feedings, remote.feedings, "feeding", deletedLookup, "startedAt"),
+    diapers: mergeCollection(local.diapers, remote.diapers, "diaper", deletedLookup, "createdAt"),
+    bottles: mergeCollection(local.bottles, remote.bottles, "bottle", deletedLookup, "createdAt"),
+    pumps: mergeCollection(local.pumps, remote.pumps, "pump", deletedLookup, "createdAt"),
+  });
+}
+
+function mergeCollection(localItems, remoteItems, type, deletedLookup, dateField) {
+  const byId = new Map();
+
+  [...remoteItems, ...localItems].forEach((item) => {
+    if (!item?.id) return;
+    const deletedAt = deletedLookup.get(deletedKey(type, item.id));
+    if (deletedAt && getRecordUpdatedAt(item) <= deletedAt) return;
+
+    const existing = byId.get(item.id);
+    if (!existing || getRecordUpdatedAt(item) >= getRecordUpdatedAt(existing)) {
+      byId.set(item.id, item);
+    }
+  });
+
+  return [...byId.values()].sort((a, b) => new Date(b[dateField] || 0) - new Date(a[dateField] || 0));
+}
+
+function mergeDeletedEvents(localDeleted, remoteDeleted) {
+  const byKey = new Map();
+
+  [...remoteDeleted, ...localDeleted].forEach((item) => {
+    if (!item?.id || !item?.type || !item?.deletedAt) return;
+    const key = deletedKey(item.type, item.id);
+    const existing = byKey.get(key);
+    if (!existing || new Date(item.deletedAt) >= new Date(existing.deletedAt)) {
+      byKey.set(key, item);
+    }
+  });
+
+  return [...byKey.values()]
+    .sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt))
+    .slice(0, 500);
+}
+
+function createDeletedLookup(deletedEvents) {
+  const lookup = new Map();
+  deletedEvents.forEach((item) => lookup.set(deletedKey(item.type, item.id), getRecordUpdatedAt({ updatedAt: item.deletedAt })));
+  return lookup;
+}
+
+function deletedKey(type, id) {
+  return `${type}:${id}`;
+}
+
+function getRecordUpdatedAt(item) {
+  return new Date(item.updatedAt || item.endedAt || item.createdAt || item.startedAt || 0).getTime();
 }
 
 function openModal(dialog) {
@@ -412,11 +870,14 @@ function openResetDialog() {
 }
 
 function resetCurrentUserData() {
+  const syncSettings = clone(state.sync);
+  const deletedEvents = createResetTombstones(state);
   localStorage.removeItem(storageKeyFor(currentUser));
   if (currentUser.provider === "guest") {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
   }
-  state = clone(defaultState);
+  state = { ...clone(defaultState), sync: syncSettings, deletedEvents };
+  saveState();
   clearNextFeedingNotification();
   clearUndo();
   renderSyncSettings();
@@ -431,16 +892,20 @@ function renderAuth() {
   els.userStatus.textContent = isGuest ? "לא מחובר לגוגל" : `מחובר כ-${currentUser.email || currentUser.name}`;
   els.googleSignInButton.hidden = !isGuest;
   els.signOutButton.hidden = isGuest;
-  els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : `נשמר עבור ${currentUser.name}`;
+  els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : cloudStatusText || `נשמר עבור ${currentUser.name}`;
 }
 
 function renderSyncSettings() {
   els.partnerEmailsInput.value = state.sync.partnerEmails.join(", ");
-  const hasCloudConfig = Boolean(window.LULLABY_LOG_CONFIG?.firebaseConfig || window.LULLABY_LOG_CONFIG?.supabaseUrl);
+  const hasCloudConfig = hasFirebaseConfig();
   if (!currentUser.email) {
     els.syncConfigStatus.textContent = "יש להתחבר עם Google לפני סנכרון זוגי.";
   } else if (!hasCloudConfig) {
-    els.syncConfigStatus.textContent = "האימיילים נשמרו, אבל עדיין חסרה הגדרת ענן לסנכרון אמיתי.";
+    els.syncConfigStatus.textContent = "חסרה הגדרת Firebase ב-config.js. עד אז הנתונים נשמרים מקומית.";
+  } else if (!firebaseServices?.auth.currentUser) {
+    els.syncConfigStatus.textContent = "Firebase מוגדר. צריך להתחבר עם Google כדי לפתוח סנכרון ענן.";
+  } else if (cloudDocRef) {
+    els.syncConfigStatus.textContent = partnerSyncLabel(cloudMemberEmails.length ? cloudMemberEmails : getCloudMemberEmails());
   } else {
     els.syncConfigStatus.textContent = "מוכן לחיבור סנכרון ענן.";
   }
@@ -453,6 +918,7 @@ function savePartnerEmails() {
     .filter(Boolean);
   saveState();
   renderSyncSettings();
+  connectCloudSync();
   showToast("אימיילים לסנכרון נשמרו");
 }
 
@@ -563,19 +1029,23 @@ function handleSideTap(side) {
 }
 
 function startFeeding(side, options = {}) {
+  const now = new Date().toISOString();
   const feeding = {
     id: crypto.randomUUID(),
     side,
     pumpId: options.pumpId || "",
-    startedAt: new Date().toISOString(),
+    startedAt: now,
     pauses: [],
     createdBy: currentUser.id,
+    updatedAt: now,
+    updatedBy: currentUser.id,
   };
 
   state.feedings.unshift(feeding);
   saveState();
   showUndo(`${isBottleFeeding(feeding) ? "התחיל בקבוק" : `התחילה הנקה מצד ${sideLabel(side)}`}`, () => {
     state.feedings = state.feedings.filter((item) => item.id !== feeding.id);
+    trackDeletedEvent("feeding", feeding.id);
     saveState();
     render();
   });
@@ -647,9 +1117,10 @@ function stopFeeding() {
   const previous = clone(active);
   closeOpenPause(active);
   active.endedAt = new Date().toISOString();
+  touchRecord(active);
   saveState();
   showUndo(isBottleFeeding(active) ? "הבקבוק הסתיים" : "ההנקה הסתיימה", () => {
-    state.feedings = state.feedings.map((item) => (item.id === previous.id ? previous : item));
+    state.feedings = state.feedings.map((item) => (item.id === previous.id ? touchRecord(previous) : item));
     saveState();
     render();
   });
@@ -674,13 +1145,14 @@ function toggleDessert() {
     showUndo(`נרשם קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
   }
 
+  touchRecord(active);
   saveState();
   vibrate(18);
   render();
 }
 
 function restoreFeeding(previous) {
-  state.feedings = state.feedings.map((item) => (item.id === previous.id ? previous : item));
+  state.feedings = state.feedings.map((item) => (item.id === previous.id ? touchRecord(previous) : item));
   saveState();
   render();
 }
@@ -692,8 +1164,10 @@ function togglePause() {
   const openPause = active.pauses.find((pause) => !pause.endedAt);
   if (openPause) {
     openPause.endedAt = new Date().toISOString();
+    touchRecord(active);
     showUndo("העצירה הסתיימה", () => {
       openPause.endedAt = undefined;
+      touchRecord(active);
       saveState();
       render();
     });
@@ -703,8 +1177,10 @@ function togglePause() {
       reason: "burp",
     };
     active.pauses.push(pause);
+    touchRecord(active);
     showUndo("נרשמה עצירת גרעפס", () => {
       active.pauses = active.pauses.filter((item) => item !== pause);
+      touchRecord(active);
       saveState();
       render();
     });
@@ -760,6 +1236,7 @@ function saveMilkDialog() {
       feeding.amountUnit = unit;
       if (!feeding.pumpId && pendingBottlePumpId) feeding.pumpId = pendingBottlePumpId;
       delete feeding.amountMl;
+      touchRecord(feeding);
       saveState();
       render();
       showToast(amount ? `נרשם ${formatAmount({ amountValue: amount, amountUnit: unit })}` : "הבקבוק נשמר");
@@ -768,6 +1245,7 @@ function saveMilkDialog() {
   }
 
   if (mode === "pump") {
+    const now = new Date().toISOString();
     const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
     const pump = {
       id: crypto.randomUUID(),
@@ -778,24 +1256,31 @@ function saveMilkDialog() {
       createdAt,
       expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
       createdBy: currentUser.id,
+      updatedAt: now,
+      updatedBy: currentUser.id,
     };
     state.pumps.unshift(pump);
     showUndo("נרשמה שאיבה", () => {
       state.pumps = state.pumps.filter((item) => item.id !== pump.id);
+      trackDeletedEvent("pump", pump.id);
       saveState();
       render();
     });
   } else {
+    const now = new Date().toISOString();
     const bottle = {
       id: crypto.randomUUID(),
       amountValue: amount,
       amountUnit: unit,
       createdAt,
       createdBy: currentUser.id,
+      updatedAt: now,
+      updatedBy: currentUser.id,
     };
     state.bottles.unshift(bottle);
     showUndo("נרשם בקבוק", () => {
       state.bottles = state.bottles.filter((item) => item.id !== bottle.id);
+      trackDeletedEvent("bottle", bottle.id);
       saveState();
       render();
     });
@@ -812,17 +1297,21 @@ function closeOpenPause(feeding) {
 }
 
 function addDiaper(type) {
+  const now = new Date().toISOString();
   const diaper = {
     id: crypto.randomUUID(),
     type,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
     createdBy: currentUser.id,
+    updatedAt: now,
+    updatedBy: currentUser.id,
   };
 
   state.diapers.unshift(diaper);
   saveState();
   showUndo(`נרשם ${diaperLabel(type)}`, () => {
     state.diapers = state.diapers.filter((item) => item.id !== diaper.id);
+    trackDeletedEvent("diaper", diaper.id);
     saveState();
     render();
   });
@@ -1125,11 +1614,13 @@ function deleteEvent(type, id) {
   if (index < 0) return;
 
   collection.splice(index, 1);
+  trackDeletedEvent(type, id);
   saveState();
   render();
   showUndo("הפעולה נמחקה", () => {
     const target = getCollectionForType(type);
     target.splice(0, target.length, ...previous);
+    untrackDeletedEvent(type, id);
     saveState();
     render();
   });
@@ -1263,6 +1754,7 @@ function maybeShowSleepyReminder(active) {
 
   if (elapsed >= SLEEPY_REMINDER_MS && !hasPause) {
     active.sleepyReminderShownAt = new Date().toISOString();
+    touchRecord(active);
     saveState();
     vibrate([80, 80, 80]);
     openModal(els.sleepyDialog);
@@ -1303,9 +1795,52 @@ function getCollectionForType(type) {
 }
 
 function upsertById(collection, payload) {
+  touchRecord(payload);
   const index = collection.findIndex((item) => item.id === payload.id);
   if (index >= 0) collection[index] = payload;
   else collection.unshift(payload);
+  untrackDeletedEvent(collectionType(collection), payload.id);
+}
+
+function touchRecord(record) {
+  if (!record) return record;
+  record.updatedAt = new Date().toISOString();
+  record.updatedBy = currentUser.id;
+  return record;
+}
+
+function collectionType(collection) {
+  if (collection === state.feedings) return "feeding";
+  if (collection === state.diapers) return "diaper";
+  if (collection === state.bottles) return "bottle";
+  return "pump";
+}
+
+function trackDeletedEvent(type, id) {
+  if (!id) return;
+  const deletedAt = new Date().toISOString();
+  state.deletedEvents = [
+    { type, id, deletedAt, deletedBy: currentUser.id },
+    ...state.deletedEvents.filter((item) => deletedKey(item.type, item.id) !== deletedKey(type, id)),
+  ].slice(0, 500);
+}
+
+function untrackDeletedEvent(type, id) {
+  state.deletedEvents = state.deletedEvents.filter((item) => deletedKey(item.type, item.id) !== deletedKey(type, id));
+}
+
+function createResetTombstones(sourceState) {
+  const deletedAt = new Date().toISOString();
+  const deletedBy = currentUser.id;
+  const tombstones = [
+    ...sourceState.feedings.map((item) => ({ type: "feeding", id: item.id, deletedAt, deletedBy })),
+    ...sourceState.diapers.map((item) => ({ type: "diaper", id: item.id, deletedAt, deletedBy })),
+    ...sourceState.bottles.map((item) => ({ type: "bottle", id: item.id, deletedAt, deletedBy })),
+    ...sourceState.pumps.map((item) => ({ type: "pump", id: item.id, deletedAt, deletedBy })),
+    ...sourceState.deletedEvents,
+  ].filter((item) => item.id);
+
+  return mergeDeletedEvents(tombstones, []);
 }
 
 function nextStartSide(feeding) {
