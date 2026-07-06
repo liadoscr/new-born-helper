@@ -325,18 +325,43 @@ async function signInWithGoogle() {
 
   try {
     setCloudStatus("מתחבר ל-Google...", "נפתח חלון התחברות של Firebase Auth.");
+    els.googleSignInButton.disabled = true;
     const provider = new services.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
+    await services.setPersistence(services.auth, services.browserLocalPersistence);
+
+    if (shouldUseRedirectSignIn()) {
+      await services.signInWithRedirect(services.auth, provider);
+      return;
+    }
+
     const result = await services.signInWithPopup(services.auth, provider);
-    const user = userFromFirebase(result.user);
-    switchUser(user);
+    const user = applyFirebaseUser(result.user);
     closeMenu();
     showToast(`מחובר כ-${user.name}`);
     await connectCloudSync();
   } catch (error) {
+    if (services.auth.currentUser) {
+      const user = applyFirebaseUser(services.auth.currentUser);
+      closeMenu();
+      showToast(`מחובר כ-${user.name}`);
+      return;
+    }
+
     setCloudStatus("נשמר מקומית", `Firebase Auth נכשל: ${error.message}`);
     showToast("התחברות Google נכשלה. בדוק ש-Google provider והדומיין מוגדרים ב-Firebase.");
+  } finally {
+    if (currentUser.provider === "guest") {
+      els.googleSignInButton.disabled = false;
+    }
   }
+}
+
+function shouldUseRedirectSignIn() {
+  const ua = navigator.userAgent || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isStandalone = window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone;
+  return isIOS || isStandalone || window.innerWidth <= 720;
 }
 
 async function signOut() {
@@ -387,8 +412,10 @@ async function loadFirebaseServices() {
         db,
         GoogleAuthProvider: authModule.GoogleAuthProvider,
         arrayUnion: firestoreModule.arrayUnion,
+        browserLocalPersistence: authModule.browserLocalPersistence,
         collection: firestoreModule.collection,
         doc: firestoreModule.doc,
+        getRedirectResult: authModule.getRedirectResult,
         getDocs: firestoreModule.getDocs,
         limit: firestoreModule.limit,
         onAuthStateChanged: authModule.onAuthStateChanged,
@@ -396,6 +423,8 @@ async function loadFirebaseServices() {
         query: firestoreModule.query,
         serverTimestamp: firestoreModule.serverTimestamp,
         setDoc: firestoreModule.setDoc,
+        setPersistence: authModule.setPersistence,
+        signInWithRedirect: authModule.signInWithRedirect,
         signInWithPopup: authModule.signInWithPopup,
         signOut: authModule.signOut,
         where: firestoreModule.where,
@@ -419,26 +448,53 @@ async function initCloudAuth() {
     return;
   }
 
+  try {
+    await services.setPersistence(services.auth, services.browserLocalPersistence);
+    const redirectResult = await services.getRedirectResult(services.auth);
+    if (redirectResult?.user) {
+      applyFirebaseUser(redirectResult.user);
+      closeMenu();
+      showToast(`מחובר כ-${redirectResult.user.displayName || redirectResult.user.email}`);
+    }
+  } catch (error) {
+    setCloudStatus("נשמר מקומית", `בדיקת התחברות Google נכשלה: ${error.message}`);
+  }
+
   firebaseAuthUnsubscribe = services.onAuthStateChanged(services.auth, (firebaseUser) => {
     if (!firebaseUser) {
       stopCloudSync();
+      if (currentUser.provider !== "guest") {
+        switchUser(GUEST_USER);
+      }
       renderSyncSettings();
       return;
     }
 
-    if (currentUser.provider !== "guest") {
-      currentUser = {
-        ...currentUser,
-        firebaseUid: firebaseUser.uid,
-        email: firebaseUser.email || currentUser.email,
-        name: firebaseUser.displayName || currentUser.name,
-        picture: firebaseUser.photoURL || currentUser.picture,
-      };
-      saveAuthUser(currentUser);
-      renderAuth();
-      connectCloudSync();
-    }
+    applyFirebaseUser(firebaseUser);
   });
+}
+
+function applyFirebaseUser(firebaseUser) {
+  const user = userFromFirebase(firebaseUser);
+  const isSameUser = currentUser.provider !== "guest" && currentUser.firebaseUid === firebaseUser.uid;
+
+  if (!isSameUser) {
+    switchUser(user);
+    return user;
+  }
+
+  currentUser = {
+    ...currentUser,
+    firebaseUid: firebaseUser.uid,
+    email: firebaseUser.email || currentUser.email,
+    name: firebaseUser.displayName || currentUser.name,
+    picture: firebaseUser.photoURL || currentUser.picture,
+  };
+  saveAuthUser(currentUser);
+  renderAuth();
+  renderSyncSettings();
+  connectCloudSync();
+  return currentUser;
 }
 
 function userFromFirebase(firebaseUser) {
