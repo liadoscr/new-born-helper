@@ -52,8 +52,8 @@
           יומן
         </button>
         <button type="button" data-view-target="sync">
-          <span aria-hidden="true">◎</span>
-          Sync
+          <span aria-hidden="true">👥</span>
+          משפחה
         </button>
         <button type="button" data-view-target="settings">
           <span aria-hidden="true">⚙</span>
@@ -174,18 +174,34 @@
       <section class="view" id="syncView" data-view="sync" aria-labelledby="syncTitle">
         <div class="partner-header">
           <div>
-            <h1 id="syncTitle">דשבורד בן זוג</h1>
+            <h1 id="syncTitle">משפחה</h1>
             <div class="sync-line">
               <span class="live-dot" id="statusDot" aria-hidden="true"></span>
               <span id="syncStatus">נשמר במכשיר</span>
             </div>
           </div>
-          <span class="soft-small">סנכרון ענן יתווסף בשלב הבא</span>
+          <span class="soft-small">היומן המשותף של ההורים</span>
         </div>
+
+        <section class="auth-card settings-card" aria-labelledby="pairingTitle">
+          <div class="settings-card-head">
+            <span class="settings-icon" aria-hidden="true">👥</span>
+            <div>
+              <h2 id="pairingTitle">שיתוף זוגי</h2>
+              <p id="syncConfigStatus">נשמר מקומית עד חיבור שירות ענן.</p>
+            </div>
+          </div>
+          <label class="field-row">
+            <span>אימייל בן/בת זוג</span>
+            <input id="partnerEmailsInput" type="email" multiple placeholder="partner@example.com" />
+          </label>
+          <button class="finish-action full-width" id="savePartnerEmailsButton" type="button">שמירת שיתוף</button>
+          <p class="config-hint">כשהצד השני מתחבר עם Google באימייל הזה, היומן מסתנכרן אוטומטית בין המכשירים.</p>
+        </section>
 
         <section class="live-card">
           <div class="card-heading">
-            <h2>סטטוס חי</h2>
+            <h2>מה קורה עכשיו</h2>
             <span id="partnerStatus">מוכן להתחלה</span>
           </div>
           <strong class="partner-timer" id="partnerElapsed">--</strong>
@@ -256,22 +272,6 @@
             <p class="config-hint">ב-iOS יש להוסיף את האתר למסך הבית ולאשר התראות מתוך האפליקציה.</p>
           </article>
 
-          <article class="auth-card settings-card" aria-labelledby="pairingTitle">
-            <div class="settings-card-head">
-              <span class="settings-icon" aria-hidden="true">◎</span>
-              <div>
-                <h2 id="pairingTitle">סנכרון זוגי</h2>
-                <p id="syncConfigStatus">נשמר מקומית עד חיבור שירות ענן.</p>
-              </div>
-            </div>
-            <label class="field-row">
-              <span>אימיילים מורשים</span>
-              <input id="partnerEmailsInput" type="email" multiple placeholder="email@example.com, partner@example.com" />
-            </label>
-            <button class="finish-action full-width" id="savePartnerEmailsButton" type="button">שמירת אימיילים</button>
-            <p class="config-hint">כדי שהנתונים באמת יסתנכרנו בין מכשירים צריך להגדיר Firebase או Supabase בקובץ config.js.</p>
-          </article>
-
           <article class="auth-card settings-card danger-settings" aria-labelledby="dataTitle">
             <div class="settings-card-head">
               <span class="settings-icon" aria-hidden="true">!</span>
@@ -294,6 +294,10 @@
       <button type="button" data-view-target="logs">
         <span aria-hidden="true">▤</span>
         יומן
+      </button>
+      <button type="button" data-view-target="sync">
+        <span aria-hidden="true">👥</span>
+        משפחה
       </button>
       <button type="button" data-view-target="settings">
         <span aria-hidden="true">⚙</span>

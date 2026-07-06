@@ -1781,7 +1781,7 @@ body {
   inset: auto 0 0;
   z-index: 35;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: min(100%, 28rem);
   margin-inline: auto;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
