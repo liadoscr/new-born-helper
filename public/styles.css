@@ -992,10 +992,23 @@ p {
   max-width: 44%;
 }
 
-.history-edit {
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.history-edit,
+.history-delete {
   min-height: 38px;
   padding: 0 14px;
   font-size: 0.9rem;
+}
+
+.history-delete {
+  border-color: rgba(255, 180, 171, 0.34);
+  color: var(--error);
 }
 
 .sync-line {
@@ -1249,6 +1262,10 @@ p {
     justify-items: start;
     max-width: 100%;
     text-align: right;
+  }
+
+  .history-actions {
+    justify-content: flex-start;
   }
 
   .dialog-actions {

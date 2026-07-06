@@ -296,6 +296,19 @@
       </form>
     </dialog>
 
+    <dialog class="sleepy-dialog" id="deleteDialog">
+      <form method="dialog">
+        <input id="deleteEventType" type="hidden" />
+        <input id="deleteEventId" type="hidden" />
+        <h2>למחוק מהיומן?</h2>
+        <p id="deleteEventText">הפעולה תימחק מהיומן.</p>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="danger-action full-width" value="confirm">מחיקה</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="sleepy-dialog" id="milkDialog">
       <form method="dialog">
         <input id="milkMode" type="hidden" />

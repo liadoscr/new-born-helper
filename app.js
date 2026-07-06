@@ -72,6 +72,10 @@ const els = {
   entryStorageInput: document.querySelector("#entryStorageInput"),
   entryStorageRow: document.querySelector("#entryStorageRow"),
   entryTypeInput: document.querySelector("#entryTypeInput"),
+  deleteDialog: document.querySelector("#deleteDialog"),
+  deleteEventId: document.querySelector("#deleteEventId"),
+  deleteEventText: document.querySelector("#deleteEventText"),
+  deleteEventType: document.querySelector("#deleteEventType"),
   exportButton: document.querySelector("#exportButton"),
   googleSignInButton: document.querySelector("#googleSignInButton"),
   historyList: document.querySelector("#historyList"),
@@ -180,6 +184,9 @@ function init() {
   els.historyList.addEventListener("click", handleHistoryClick);
   els.resetDialog.addEventListener("close", () => {
     if (els.resetDialog.returnValue === "confirm") resetCurrentUserData();
+  });
+  els.deleteDialog.addEventListener("close", () => {
+    if (els.deleteDialog.returnValue === "confirm") deleteSelectedEvent();
   });
   els.milkDialog.addEventListener("close", () => {
     if (els.milkDialog.returnValue === "save") saveMilkDialog();
@@ -1060,7 +1067,10 @@ function renderHistory() {
               <div class="history-meta">
                 <span>שעה ${formatTime(event.at)}</span>
                 ${event.duration ? `<span>${event.type === "feeding" ? "משך " : ""}${event.duration}</span>` : ""}
-                <button class="text-button history-edit" type="button" data-edit-type="${event.type}" data-edit-id="${event.id}">עריכה</button>
+                <div class="history-actions">
+                  <button class="text-button history-edit" type="button" data-edit-type="${event.type}" data-edit-id="${event.id}">עריכה</button>
+                  <button class="text-button history-delete" type="button" data-delete-type="${event.type}" data-delete-id="${event.id}">מחיקה</button>
+                </div>
               </div>
             </li>
           `,
@@ -1070,9 +1080,62 @@ function renderHistory() {
 }
 
 function handleHistoryClick(event) {
-  const button = event.target.closest("[data-edit-type]");
-  if (!button) return;
-  openEntryDialog(button.dataset.editType, button.dataset.editId);
+  const deleteButton = event.target.closest("[data-delete-type]");
+  if (deleteButton) {
+    openDeleteDialog(deleteButton.dataset.deleteType, deleteButton.dataset.deleteId);
+    return;
+  }
+
+  const editButton = event.target.closest("[data-edit-type]");
+  if (!editButton) return;
+  openEntryDialog(editButton.dataset.editType, editButton.dataset.editId);
+}
+
+function openDeleteDialog(type, id) {
+  const item = findEvent(type, id);
+  if (!item) return;
+
+  const label = eventDeleteLabel(type, item);
+  els.deleteDialog.returnValue = "";
+  els.deleteEventType.value = type;
+  els.deleteEventId.value = id;
+  els.deleteEventText.textContent = `למחוק את ${label} מהיומן?`;
+
+  if (typeof els.deleteDialog.showModal === "function") {
+    els.deleteDialog.showModal();
+    return;
+  }
+
+  if (confirm(`למחוק את ${label} מהיומן?`)) deleteEvent(type, id);
+}
+
+function deleteSelectedEvent() {
+  deleteEvent(els.deleteEventType.value, els.deleteEventId.value);
+}
+
+function deleteEvent(type, id) {
+  const collection = getCollectionForType(type);
+  const previous = clone(collection);
+  const index = collection.findIndex((item) => item.id === id);
+  if (index < 0) return;
+
+  collection.splice(index, 1);
+  saveState();
+  render();
+  showUndo("הפעולה נמחקה", () => {
+    const target = getCollectionForType(type);
+    target.splice(0, target.length, ...previous);
+    saveState();
+    render();
+  });
+}
+
+function eventDeleteLabel(type, item) {
+  if (type === "feeding") return isBottleFeeding(item) ? feedingSummary(item) : `הנקה ${feedingSummary(item)}`;
+  if (type === "diaper") return diaperLabel(item.type);
+  if (type === "bottle") return "בקבוק";
+  if (type === "pump") return `שאיבה ${pumpCode(item)}`;
+  return "הפעולה";
 }
 
 function openEntryDialog(type = "feeding", id = "") {
