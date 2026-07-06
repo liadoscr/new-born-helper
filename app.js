@@ -586,6 +586,14 @@ async function connectCloudSync() {
   cloudMemberEmails = memberEmails;
   setCloudStatus("מתחבר לענן...", "פותח סנכרון בזמן אמת מול Firestore.");
 
+  try {
+    await ensureCloudDocReady();
+  } catch (error) {
+    stopCloudSync();
+    setCloudStatus("נשמר מקומית", `לא הצלחתי ליצור מסמך סנכרון: ${error.message}`);
+    return;
+  }
+
   cloudUnsubscribe = services.onSnapshot(
     cloudDocRef,
     { includeMetadataChanges: true },
@@ -594,6 +602,32 @@ async function connectCloudSync() {
       stopCloudSync();
       setCloudStatus("נשמר מקומית", `שגיאת סנכרון Firestore: ${error.message}`);
     },
+  );
+}
+
+async function ensureCloudDocReady() {
+  if (!cloudDocRef) return;
+
+  const services = await loadFirebaseServices();
+  const firebaseUser = services?.auth.currentUser;
+  if (!services || !firebaseUser) return;
+
+  const memberEmails = getCloudMemberEmails();
+  cloudMemberEmails = memberEmails;
+
+  await services.setDoc(
+    cloudDocRef,
+    {
+      app: "newborn-helper",
+      schemaVersion: 2,
+      memberEmails,
+      memberUids: services.arrayUnion(firebaseUser.uid),
+      updatedAt: new Date().toISOString(),
+      updatedByEmail: currentUser.email || "",
+      updatedByUid: firebaseUser.uid,
+      serverUpdatedAt: services.serverTimestamp(),
+    },
+    { merge: true },
   );
 }
 
