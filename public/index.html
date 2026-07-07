@@ -81,6 +81,7 @@
         <section class="timer-stage" aria-label="טיימר הנקה">
           <div id="activeTimer" class="main-timer" dir="ltr">00:00</div>
           <p id="timerHint" class="timer-hint">מוכנה להתחיל</p>
+          <button class="text-button timer-edit-button" id="editActiveStartButton" type="button" hidden>תיקון שעה</button>
         </section>
 
         <section class="side-toggle" aria-label="בחירת צד">
@@ -517,6 +518,25 @@
             </select>
           </label>
         </div>
+        <div class="dialog-actions">
+          <button class="ghost-action full-width" value="cancel">ביטול</button>
+          <button class="finish-action full-width" value="save">שמירה</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="sleepy-dialog" id="activeStartDialog">
+      <form method="dialog">
+        <h2 id="activeStartDialogTitle" tabindex="-1" data-dialog-focus autofocus>תיקון שעת התחלה</h2>
+        <p id="activeStartDialogText">עדכון שעת התחלת ההאכלה הפעילה.</p>
+        <label class="field-row">
+          <span>תאריך</span>
+          <input id="activeStartDateInput" type="date" />
+        </label>
+        <label class="field-row">
+          <span>שעת התחלה</span>
+          <input id="activeStartTimeInput" type="time" />
+        </label>
         <div class="dialog-actions">
           <button class="ghost-action full-width" value="cancel">ביטול</button>
           <button class="finish-action full-width" value="save">שמירה</button>

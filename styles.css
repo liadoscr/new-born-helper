@@ -620,6 +620,12 @@ p {
   text-align: center;
 }
 
+.timer-edit-button {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 0.95rem;
+}
+
 .side-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;

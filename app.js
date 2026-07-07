@@ -113,6 +113,10 @@ let cloudRefreshPromise = null;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
+  activeStartDateInput: document.querySelector("#activeStartDateInput"),
+  activeStartDialog: document.querySelector("#activeStartDialog"),
+  activeStartDialogText: document.querySelector("#activeStartDialogText"),
+  activeStartTimeInput: document.querySelector("#activeStartTimeInput"),
   activeTimer: document.querySelector("#activeTimer"),
   acceptFamilyInviteButton: document.querySelector("#acceptFamilyInviteButton"),
   addManualButton: document.querySelector("#addManualButton"),
@@ -123,6 +127,7 @@ const els = {
   entryAmountUnitInput: document.querySelector("#entryAmountUnitInput"),
   dessertButton: document.querySelector("#dessertButton"),
   diaperButtons: document.querySelectorAll("[data-diaper]"),
+  editActiveStartButton: document.querySelector("#editActiveStartButton"),
   entryAmountInput: document.querySelector("#entryAmountInput"),
   entryDateInput: document.querySelector("#entryDateInput"),
   entryDessertAttemptInput: document.querySelector("#entryDessertAttemptInput"),
@@ -243,6 +248,7 @@ function init() {
   els.pauseButton.addEventListener("click", togglePause);
   els.stopButton.addEventListener("click", stopFeeding);
   els.dessertButton.addEventListener("click", toggleDessert);
+  els.editActiveStartButton.addEventListener("click", openActiveStartDialog);
   els.undoButton.addEventListener("click", runUndo);
   els.exportButton.addEventListener("click", exportData);
   els.addManualButton.addEventListener("click", () => openEntryDialog());
@@ -276,6 +282,9 @@ function init() {
   });
   els.entryDialog.addEventListener("close", () => {
     if (els.entryDialog.returnValue === "save") saveEntryDialog();
+  });
+  els.activeStartDialog.addEventListener("close", () => {
+    if (els.activeStartDialog.returnValue === "save") saveActiveStartDialog();
   });
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -1349,6 +1358,61 @@ function toggleDessert() {
   render();
 }
 
+function openActiveStartDialog() {
+  const active = getActiveFeeding();
+  if (!active) return;
+
+  const startedAt = new Date(active.startedAt);
+  els.activeStartDialog.returnValue = "";
+  els.activeStartDateInput.value = toDateInputValue(startedAt);
+  els.activeStartTimeInput.value = toTimeInputValue(startedAt);
+  els.activeStartDialogText.textContent = `${isBottleFeeding(active) ? "בקבוק" : `הנקה מצד ${sideLabel(active.side)}`} התחילה כרגע ב-${formatTime(active.startedAt)}.`;
+  openModal(els.activeStartDialog);
+}
+
+function saveActiveStartDialog() {
+  const active = getActiveFeeding();
+  if (!active) return;
+
+  const nextStartedAt = combineDateAndTime(els.activeStartDateInput.value, els.activeStartTimeInput.value);
+  const validationError = validateActiveStartChange(active, nextStartedAt);
+  if (validationError) {
+    showToast(validationError);
+    return;
+  }
+
+  const previous = clone(active);
+  active.startedAt = nextStartedAt;
+  touchRecord(active);
+  saveState();
+  showUndo(`שעת ההתחלה עודכנה ל-${formatTime(nextStartedAt)}`, () => restoreFeeding(previous));
+  vibrate(18);
+  render();
+}
+
+function validateActiveStartChange(feeding, nextStartedAt) {
+  const next = new Date(nextStartedAt);
+  if (!Number.isFinite(next.getTime())) return "שעת ההתחלה לא תקינה";
+  if (next.getTime() > Date.now() + 30 * 1000) return "אי אפשר לבחור שעת התחלה עתידית";
+
+  const firstLaterEvent = [
+    ...(feeding.pauses || []).map((pause) => pause.startedAt),
+    feeding.dessertAttemptStartedAt,
+    feeding.dessertStartedAt,
+    feeding.dessertAt,
+  ]
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)[0];
+
+  if (firstLaterEvent && next.getTime() > firstLaterEvent) {
+    return "שעת ההתחלה חייבת להיות לפני עצירה או קינוח שכבר נרשמו";
+  }
+
+  return "";
+}
+
 function restoreFeeding(previous) {
   state.feedings = state.feedings.map((item) => (item.id === previous.id ? touchRecord(previous) : item));
   saveState();
@@ -1567,6 +1631,7 @@ function autoCloseLongFeedings() {
 
 function renderFeeding(active, latest, latestStarted) {
   els.activeControls.hidden = !active;
+  els.editActiveStartButton.hidden = !active;
   els.activeTimer.classList.toggle("is-active", Boolean(active));
 
   if (active) {
