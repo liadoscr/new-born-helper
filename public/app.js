@@ -1,5 +1,6 @@
 const FEEDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const SLEEPY_REMINDER_MS = 5 * 60 * 1000;
+const AUTO_CLOSE_FEEDING_MS = 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const PEE_GOAL = 5;
@@ -1415,9 +1416,9 @@ function saveMilkDialog() {
   render();
 }
 
-function closeOpenPause(feeding) {
+function closeOpenPause(feeding, endedAt = new Date().toISOString()) {
   const openPause = feeding.pauses.find((pause) => !pause.endedAt);
-  if (openPause) openPause.endedAt = new Date().toISOString();
+  if (openPause) openPause.endedAt = endedAt;
 }
 
 function addDiaper(type) {
@@ -1444,6 +1445,7 @@ function addDiaper(type) {
 }
 
 function render() {
+  autoCloseLongFeedings();
   const active = getActiveFeeding();
   const latest = getLatestFeeding();
   const latestStarted = latest ? getFeedingIntervalBaseDate(latest) : null;
@@ -1452,6 +1454,29 @@ function render() {
   renderDiapers();
   renderHistory();
   maybeShowSleepyReminder(active);
+}
+
+function autoCloseLongFeedings() {
+  const now = Date.now();
+  let changed = false;
+
+  state.feedings.forEach((feeding) => {
+    if (feeding.endedAt || !feeding.startedAt || isBottleFeeding(feeding)) return;
+    const startedAt = new Date(feeding.startedAt).getTime();
+    if (!Number.isFinite(startedAt) || now - startedAt < AUTO_CLOSE_FEEDING_MS) return;
+
+    closeOpenPause(feeding, new Date(startedAt + AUTO_CLOSE_FEEDING_MS).toISOString());
+    feeding.endedAt = new Date(startedAt + AUTO_CLOSE_FEEDING_MS).toISOString();
+    feeding.autoClosed = true;
+    feeding.autoClosedReason = "האם שכחתם לסגור?";
+    touchRecord(feeding);
+    changed = true;
+  });
+
+  if (changed) {
+    saveState();
+    showToast("הנקה נסגרה אוטומטית אחרי 60 דקות");
+  }
 }
 
 function renderFeeding(active, latest, latestStarted) {
@@ -1640,7 +1665,7 @@ function renderHistory() {
       title: isBottleFeeding(feeding) ? feedingSummary(feeding) : `הנקה: ${feedingSummary(feeding)}`,
       icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
       duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
-      warning: warnings[0] || "",
+      warning: feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : warnings[0] || "",
       expired: warnings[0]?.includes("חמורה") || false,
     };
   });
@@ -1843,6 +1868,8 @@ function saveFeedingEntry(id, startedAt) {
     pauses: findEvent("feeding", id)?.pauses || [],
     createdBy: findEvent("feeding", id)?.createdBy || currentUser.id,
   };
+  delete payload.autoClosed;
+  delete payload.autoClosedReason;
   upsertById(state.feedings, payload);
 }
 
@@ -2263,7 +2290,7 @@ function buildExportRows() {
     "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
     "כמות": formatAmount(feeding),
     "תוקף": "",
-    "אזהרה": evaluateBottleWarnings(feeding)[0] || "",
+    "אזהרה": feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : evaluateBottleWarnings(feeding)[0] || "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
   const diaperRows = state.diapers.map((diaper) => ({
