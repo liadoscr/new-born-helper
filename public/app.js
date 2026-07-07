@@ -122,6 +122,8 @@ const els = {
   diaperButtons: document.querySelectorAll("[data-diaper]"),
   entryAmountInput: document.querySelector("#entryAmountInput"),
   entryDateInput: document.querySelector("#entryDateInput"),
+  entryDessertAttemptInput: document.querySelector("#entryDessertAttemptInput"),
+  entryDessertAttemptRow: document.querySelector("#entryDessertAttemptRow"),
   entryDessertInput: document.querySelector("#entryDessertInput"),
   entryDessertEndInput: document.querySelector("#entryDessertEndInput"),
   entryDessertEndRow: document.querySelector("#entryDessertEndRow"),
@@ -1267,15 +1269,24 @@ function toggleDessert() {
   if (!active.dessertSide) {
     active.dessertSide = dessertSide;
     active.dessertAt = new Date().toISOString();
-    active.dessertStartedAt = active.dessertAt;
+    active.dessertAttemptStartedAt = active.dessertAt;
+    delete active.dessertStartedAt;
     delete active.dessertEndedAt;
-    showUndo(`התחיל קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
+    delete active.dessertAttemptEndedAt;
+    showUndo(`התחיל ניסיון קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
+  } else if (!active.dessertStartedAt) {
+    active.dessertStartedAt = new Date().toISOString();
+    active.dessertAt = active.dessertStartedAt;
+    active.dessertAttemptEndedAt = active.dessertStartedAt;
+    showUndo(`הקינוח התחיל בפועל מצד ${sideLabel(active.dessertSide)}`, () => restoreFeeding(previous));
   } else if (!active.dessertEndedAt) {
     active.dessertEndedAt = new Date().toISOString();
     showUndo(`הסתיים קינוח מצד ${sideLabel(active.dessertSide)}`, () => restoreFeeding(previous));
   } else {
     delete active.dessertSide;
     delete active.dessertAt;
+    delete active.dessertAttemptStartedAt;
+    delete active.dessertAttemptEndedAt;
     delete active.dessertStartedAt;
     delete active.dessertEndedAt;
     showUndo("הקינוח הוסר", () => restoreFeeding(previous));
@@ -1435,8 +1446,11 @@ function closeOpenPause(feeding, endedAt = new Date().toISOString()) {
 }
 
 function closeOpenDessert(feeding, endedAt = new Date().toISOString()) {
-  if (feeding?.dessertSide && !feeding.dessertEndedAt) {
+  if (!feeding?.dessertSide) return;
+  if (feeding.dessertStartedAt && !feeding.dessertEndedAt) {
     feeding.dessertEndedAt = endedAt;
+  } else if (!feeding.dessertStartedAt && !feeding.dessertAttemptEndedAt) {
+    feeding.dessertAttemptEndedAt = endedAt;
   }
 }
 
@@ -1515,7 +1529,7 @@ function renderFeeding(active, latest, latestStarted) {
       els.stopButton.textContent = "סיום בקבוק";
       els.dessertButton.hidden = true;
     } else {
-      const dessertText = active.dessertSide ? ` + קינוח ${sideLabel(active.dessertSide)} ${dessertDurationLabel(active)}` : "";
+      const dessertText = active.dessertSide ? ` + ${dessertLiveLabel(active)}` : "";
       els.timerHint.textContent = `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}${dessertText}`;
       els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
       els.stopButton.textContent = "סיום הנקה";
@@ -1685,6 +1699,7 @@ function renderHistory() {
       title: isBottleFeeding(feeding) ? feedingSummary(feeding) : `הנקה: ${feedingSummary(feeding)}`,
       icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
       duration: feedingDurationLabel(feeding),
+      details: feedingPhaseDetailsHtml(feeding),
       warning: feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : warnings[0] || "",
       expired: warnings[0]?.includes("חמורה") || false,
     };
@@ -1733,6 +1748,7 @@ function renderHistory() {
                 <div class="history-main">
                   <strong>${event.title}</strong>
                   <span>${formatFullDate(event.at)}</span>
+                  ${event.details || ""}
                   ${event.warning ? `<span class="history-warning">${event.warning}</span>` : ""}
                 </div>
               </div>
@@ -1826,6 +1842,7 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryEndTimeInput.value = item?.endedAt ? toTimeInputValue(new Date(item.endedAt)) : "";
   els.entrySideInput.value = item?.side || "right";
   els.entryDessertInput.checked = Boolean(item?.dessertSide);
+  els.entryDessertAttemptInput.value = item?.dessertAttemptStartedAt ? toTimeInputValue(new Date(item.dessertAttemptStartedAt)) : "";
   els.entryDessertStartInput.value = item?.dessertStartedAt || item?.dessertAt ? toTimeInputValue(new Date(item.dessertStartedAt || item.dessertAt)) : "";
   els.entryDessertEndInput.value = item?.dessertEndedAt ? toTimeInputValue(new Date(item.dessertEndedAt)) : "";
   els.entryFeedingAmountInput.value = amountValue(item);
@@ -1848,6 +1865,7 @@ function renderEntryDialogFields() {
   });
   els.entryDessertLabel.hidden = isBottleSide;
   const showDessertTimes = type === "feeding" && !isBottleSide && els.entryDessertInput.checked;
+  els.entryDessertAttemptRow.hidden = !showDessertTimes;
   els.entryDessertStartRow.hidden = !showDessertTimes;
   els.entryDessertEndRow.hidden = !showDessertTimes;
   els.entryFeedingAmountRow.hidden = !isBottleSide;
@@ -1882,15 +1900,24 @@ function saveFeedingEntry(id, startedAt) {
   const endedAt = endTime ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, endTime)) : "";
   const isBottle = side === "bottle";
   const hasDessert = !isBottle && els.entryDessertInput.checked;
+  const dessertAttemptTime = els.entryDessertAttemptInput.value;
+  const dessertStartTime = els.entryDessertStartInput.value;
+  const dessertEndTime = els.entryDessertEndInput.value;
+  const dessertAttemptStartedAt =
+    hasDessert && dessertAttemptTime
+      ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, dessertAttemptTime))
+      : "";
   const dessertStartedAt =
-    hasDessert && els.entryDessertStartInput.value
-      ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, els.entryDessertStartInput.value))
-      : hasDessert
+    hasDessert && dessertStartTime
+      ? normalizeEndDate(dessertAttemptStartedAt || startedAt, combineDateAndTime(els.entryDateInput.value, dessertStartTime))
+      : hasDessert && !dessertAttemptTime
         ? endedAt || startedAt
         : "";
   const dessertEndedAt =
-    hasDessert && els.entryDessertEndInput.value
-      ? normalizeEndDate(dessertStartedAt || startedAt, combineDateAndTime(els.entryDateInput.value, els.entryDessertEndInput.value))
+    hasDessert && dessertStartedAt && dessertEndTime
+      ? normalizeEndDate(dessertStartedAt || startedAt, combineDateAndTime(els.entryDateInput.value, dessertEndTime))
+      : hasDessert && dessertStartedAt
+        ? endedAt
       : "";
   const payload = {
     id: id || crypto.randomUUID(),
@@ -1901,6 +1928,8 @@ function saveFeedingEntry(id, startedAt) {
     amountUnit: isBottle ? els.entryFeedingUnitInput.value || "ml" : "",
     dessertSide: hasDessert ? oppositeSide(side) : "",
     dessertAt: dessertStartedAt,
+    dessertAttemptStartedAt,
+    dessertAttemptEndedAt: dessertAttemptStartedAt ? dessertStartedAt || endedAt : "",
     dessertStartedAt,
     dessertEndedAt,
     pauses: findEvent("feeding", id)?.pauses || [],
@@ -2059,20 +2088,34 @@ function feedingSummary(feeding) {
     return `בקבוק${formatAmount(feeding) ? ` ${formatAmount(feeding)}` : ""}${pumpText}`;
   }
   const main = sideLabel(feeding.side);
-  return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)} ${dessertDurationLabel(feeding)}` : main;
+  return feeding.dessertSide ? `${main} + קינוח ${sideLabel(feeding.dessertSide)} ${dessertDurationLabel(feeding)}`.trim() : main;
 }
 
 function feedingDurationLabel(feeding) {
   if (!feeding.startedAt) return "";
   if (!feeding.endedAt) return "פעילה עכשיו";
   const total = formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt));
-  return feeding.dessertSide ? `${total} · קינוח ${dessertDurationLabel(feeding)}` : total;
+  const dessertParts = feedingPhaseRows(feeding)
+    .filter((phase) => phase.key !== "main")
+    .map((phase) => `${phase.label} ${phase.duration}`);
+  return dessertParts.length ? `${total} · ${dessertParts.join(" · ")}` : total;
 }
 
 function dessertButtonLabel(feeding, fallbackSide) {
   if (!feeding.dessertSide) return `התחלת קינוח ${sideLabel(fallbackSide)}`;
+  if (!feeding.dessertStartedAt) return `הקינוח התחיל בפועל ${sideLabel(feeding.dessertSide)}`;
   if (!feeding.dessertEndedAt) return `סיום קינוח ${sideLabel(feeding.dessertSide)}`;
   return `בטל קינוח ${sideLabel(feeding.dessertSide)}`;
+}
+
+function dessertLiveLabel(feeding) {
+  if (!feeding.dessertSide) return "";
+  if (!feeding.dessertStartedAt) {
+    const startedAt = feeding.dessertAttemptStartedAt || feeding.dessertAt;
+    const duration = startedAt ? ` (${formatHumanDuration(new Date() - new Date(startedAt))})` : "";
+    return `ניסיון קינוח ${sideLabel(feeding.dessertSide)} פעיל${duration}`;
+  }
+  return `קינוח ${sideLabel(feeding.dessertSide)} ${dessertDurationLabel(feeding)}`;
 }
 
 function dessertDurationLabel(feeding) {
@@ -2083,10 +2126,55 @@ function dessertDurationLabel(feeding) {
 }
 
 function dessertDurationMs(feeding) {
-  const startedAt = feeding?.dessertStartedAt || feeding?.dessertAt;
+  const startedAt = feeding?.dessertStartedAt || (!feeding?.dessertAttemptStartedAt ? feeding?.dessertAt : "");
   if (!startedAt) return NaN;
   const endedAt = feeding.dessertEndedAt || feeding.endedAt || new Date().toISOString();
   return new Date(endedAt) - new Date(startedAt);
+}
+
+function feedingPhaseRows(feeding) {
+  if (!feeding?.startedAt || isBottleFeeding(feeding)) return [];
+  const rows = [];
+  const mainEndsAt = feeding.dessertAttemptStartedAt || feeding.dessertStartedAt || feeding.endedAt || new Date().toISOString();
+  rows.push(createPhaseRow("main", `הנקה ${sideLabel(feeding.side)}`, feeding.startedAt, mainEndsAt));
+
+  if (feeding.dessertSide) {
+    const attemptStartedAt = feeding.dessertAttemptStartedAt || (!feeding.dessertStartedAt ? feeding.dessertAt : "");
+    const attemptEndedAt = feeding.dessertAttemptEndedAt || feeding.dessertStartedAt || (!feeding.dessertStartedAt ? feeding.endedAt : "") || "";
+    if (attemptStartedAt && attemptEndedAt) {
+      rows.push(createPhaseRow("dessert-attempt", `ניסיון קינוח ${sideLabel(feeding.dessertSide)}`, attemptStartedAt, attemptEndedAt));
+    }
+
+    const dessertStartedAt = feeding.dessertStartedAt || (!feeding.dessertAttemptStartedAt ? feeding.dessertAt : "");
+    const dessertEndedAt = feeding.dessertEndedAt || feeding.endedAt || "";
+    if (dessertStartedAt && dessertEndedAt) {
+      rows.push(createPhaseRow("dessert", `קינוח ${sideLabel(feeding.dessertSide)}`, dessertStartedAt, dessertEndedAt));
+    }
+  }
+
+  return rows.filter(Boolean);
+}
+
+function createPhaseRow(key, label, startedAt, endedAt) {
+  if (!startedAt || !endedAt) return null;
+  return {
+    key,
+    label,
+    startedAt,
+    endedAt,
+    range: `${formatTime(startedAt)}-${formatTime(endedAt)}`,
+    duration: formatHumanDuration(new Date(endedAt) - new Date(startedAt)),
+  };
+}
+
+function feedingPhaseDetailsHtml(feeding) {
+  const rows = feedingPhaseRows(feeding);
+  if (rows.length <= 1) return "";
+  return `
+    <div class="history-details">
+      ${rows.map((row) => `<span>${row.label}: ${row.range} · ${row.duration}</span>`).join("")}
+    </div>
+  `;
 }
 
 function oppositeSide(side) {
@@ -2353,6 +2441,7 @@ function buildExportRows() {
     "שעת התחלה": formatTime(feeding.startedAt),
     "שעת סיום": feeding.endedAt ? formatTime(feeding.endedAt) : "",
     "משך": feedingDurationLabel(feeding),
+    "פירוט זמנים": feedingPhaseRows(feeding).map((phase) => `${phase.label}: ${phase.range} (${phase.duration})`).join(" | "),
     "כמות": formatAmount(feeding),
     "תוקף": "",
     "אזהרה": feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : evaluateBottleWarnings(feeding)[0] || "",
@@ -2405,7 +2494,7 @@ function buildExportRows() {
 }
 
 function toCsv(rows) {
-  const headers = ["סוג פעולה", "פירוט", "שאיבה מקושרת", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "אזהרה", "נוצר על ידי"];
+  const headers = ["סוג פעולה", "פירוט", "שאיבה מקושרת", "תאריך", "שעת התחלה", "שעת סיום", "משך", "פירוט זמנים", "כמות", "תוקף", "אזהרה", "נוצר על ידי"];
   const lines = [headers.join(",")];
   rows.forEach((row) => {
     lines.push(headers.map((header) => csvEscape(row[header])).join(","));
