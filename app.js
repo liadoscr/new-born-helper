@@ -11,6 +11,7 @@ const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
+const CLOUD_REFRESH_THROTTLE_MS = 10 * 1000;
 
 const MILK_STORAGE_RULES = {
   room: {
@@ -107,6 +108,8 @@ let cloudWriteTimer = null;
 let cloudApplyingRemote = false;
 let cloudStatusText = "";
 let pendingFamilyInvitation = null;
+let cloudLastRefreshAt = 0;
+let cloudRefreshPromise = null;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -279,6 +282,11 @@ function init() {
     event.preventDefault();
     deferredInstallPrompt = event;
     els.installButton.hidden = false;
+  });
+  window.addEventListener("focus", refreshCloudOnResume);
+  window.addEventListener("online", refreshCloudOnResume);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshCloudOnResume();
   });
 
   if ("serviceWorker" in navigator) {
@@ -484,6 +492,8 @@ async function loadFirebaseServices() {
         collection: firestoreModule.collection,
         doc: firestoreModule.doc,
         getRedirectResult: authModule.getRedirectResult,
+        getDoc: firestoreModule.getDoc,
+        getDocFromServer: firestoreModule.getDocFromServer,
         getDocs: firestoreModule.getDocs,
         limit: firestoreModule.limit,
         onAuthStateChanged: authModule.onAuthStateChanged,
@@ -606,6 +616,8 @@ function stopCloudSync() {
   cloudMemberEmails = [];
   cloudApplyingRemote = false;
   cloudStatusText = "";
+  cloudLastRefreshAt = 0;
+  cloudRefreshPromise = null;
 }
 
 async function connectCloudSync() {
@@ -645,7 +657,7 @@ async function connectCloudSync() {
 
   if (cloudDocRef && cloudDocRef.path === nextDocRef.path && cloudUnsubscribe) {
     cloudMemberEmails = memberEmails;
-    scheduleCloudWrite(0);
+    refreshCloudFromServer({ force: true });
     return;
   }
 
@@ -671,6 +683,55 @@ async function connectCloudSync() {
       setCloudStatus("נשמר מקומית", `שגיאת סנכרון Firestore: ${error.message}`);
     },
   );
+
+  refreshCloudFromServer({ force: true });
+}
+
+async function refreshCloudOnResume() {
+  if (currentUser.provider === "guest") return;
+
+  try {
+    await connectCloudSync();
+    await refreshCloudFromServer();
+  } catch (error) {
+    setCloudStatus("נשמר מקומית", `לא הצלחתי לרענן סנכרון ענן: ${error.message}`);
+  }
+}
+
+async function refreshCloudFromServer({ force = false } = {}) {
+  if (!cloudDocRef || currentUser.provider === "guest") return;
+
+  const now = Date.now();
+  if (!force && now - cloudLastRefreshAt < CLOUD_REFRESH_THROTTLE_MS) {
+    if (cloudRefreshPromise) await cloudRefreshPromise;
+    return;
+  }
+
+  if (cloudRefreshPromise) {
+    await cloudRefreshPromise;
+    return;
+  }
+
+  cloudLastRefreshAt = now;
+  cloudRefreshPromise = (async () => {
+    const services = await loadFirebaseServices();
+    const firebaseUser = services?.auth.currentUser;
+    const readCloudDoc = services?.getDocFromServer || services?.getDoc;
+    if (!services || !firebaseUser || !cloudDocRef || !readCloudDoc) return;
+
+    setCloudStatus("בודק עדכונים בענן...", partnerSyncLabel(cloudMemberEmails.length ? cloudMemberEmails : getCloudMemberEmails()));
+    const snapshot = await readCloudDoc(cloudDocRef);
+    handleCloudSnapshot(snapshot);
+  })()
+    .catch((error) => {
+      const status = navigator.onLine === false ? "ממתין לרשת" : "שגיאת סנכרון";
+      setCloudStatus(status, `לא הצלחתי למשוך עדכונים מהענן: ${error.message}`);
+    })
+    .finally(() => {
+      cloudRefreshPromise = null;
+    });
+
+  await cloudRefreshPromise;
 }
 
 async function ensureCloudDocReady() {
