@@ -1,4 +1,4 @@
-const CACHE_NAME = "newborn-helper-v30";
+const CACHE_NAME = "newborn-helper-v31";
 const APP_SHELL = [
   "./",
   "./index.html",

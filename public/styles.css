@@ -951,6 +951,11 @@ p {
   color: var(--error);
 }
 
+.history-list li.is-warning .history-icon {
+  background: rgba(255, 214, 102, 0.16);
+  color: #ffd166;
+}
+
 .history-leading {
   display: flex;
   align-items: center;
@@ -984,6 +989,12 @@ p {
 .history-main span,
 .history-meta span {
   overflow-wrap: anywhere;
+}
+
+.history-warning {
+  color: var(--error) !important;
+  font-weight: 850;
+  line-height: 1.35;
 }
 
 .history-meta {

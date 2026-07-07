@@ -388,8 +388,12 @@
         </label>
         <fieldset class="choice-group" id="pumpStorageGroup">
           <legend>איפה החלב נמצא?</legend>
-          <label><input type="radio" name="pumpStorage" value="room" checked /> בחוץ - 4 שעות</label>
-          <label><input type="radio" name="pumpStorage" value="fridge" /> במקרר</label>
+          <label><input type="radio" name="pumpStorage" value="room" checked /> טמפרטורת חדר</label>
+          <label><input type="radio" name="pumpStorage" value="cooler" /> צידנית עם קרחון</label>
+          <label><input type="radio" name="pumpStorage" value="fridge" /> חלב טרי במקרר</label>
+          <label><input type="radio" name="pumpStorage" value="thawed_fridge" /> מופשר במקרר</label>
+          <label><input type="radio" name="pumpStorage" value="freezer" /> מקפיא ביתי</label>
+          <label><input type="radio" name="pumpStorage" value="deep_freezer" /> הקפאה עמוקה</label>
         </fieldset>
         <div class="dialog-actions">
           <button class="ghost-action full-width" value="cancel">ביטול</button>
@@ -496,8 +500,12 @@
           <label class="field-row" id="entryStorageRow">
             <span>אחסון</span>
             <select id="entryStorageInput">
-              <option value="room">בחוץ - 4 שעות</option>
-              <option value="fridge">במקרר</option>
+              <option value="room">טמפרטורת חדר</option>
+              <option value="cooler">צידנית עם קרחון</option>
+              <option value="fridge">חלב טרי במקרר</option>
+              <option value="thawed_fridge">מופשר במקרר</option>
+              <option value="freezer">מקפיא ביתי</option>
+              <option value="deep_freezer">הקפאה עמוקה</option>
             </select>
           </label>
         </div>

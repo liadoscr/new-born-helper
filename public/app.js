@@ -1,6 +1,7 @@
 const FEEDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const SLEEPY_REMINDER_MS = 5 * 60 * 1000;
-const ROOM_MILK_EXPIRY_MS = 4 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const PEE_GOAL = 5;
 const POOP_GOAL = 3;
 const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
@@ -9,6 +10,57 @@ const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
+
+const MILK_STORAGE_RULES = {
+  room: {
+    label: "טמפרטורת חדר",
+    recommendedMs: 4 * HOUR_MS,
+    maxMs: 6 * HOUR_MS,
+    recommendedLabel: "3-4 שעות",
+    maxLabel: "עד 6 שעות",
+    note: "בטמפרטורת חדר 16-29 מעלות.",
+  },
+  cooler: {
+    label: "צידנית אטומה עם קרחון",
+    recommendedMs: 24 * HOUR_MS,
+    maxMs: 24 * HOUR_MS,
+    recommendedLabel: "עד 24 שעות",
+    maxLabel: "עד 24 שעות",
+    note: "צריך לשמור על מגע רציף בין הקרחון לכלי החלב ולהעביר למקרר בהקדם.",
+  },
+  fridge: {
+    label: "חלב טרי במקרר",
+    recommendedMs: 4 * DAY_MS,
+    maxMs: 8 * DAY_MS,
+    recommendedLabel: "4 ימים",
+    maxLabel: "5-8 ימים",
+    note: "לאחסן בחלק האחורי של המקרר.",
+  },
+  thawed_fridge: {
+    label: "חלב שהוקפא ומופשר במקרר",
+    recommendedMs: 24 * HOUR_MS,
+    maxMs: 24 * HOUR_MS,
+    recommendedLabel: "24 שעות מרגע ההפשרה",
+    maxLabel: "24 שעות מרגע ההפשרה",
+    note: "אין להפשיר או לחמם במיקרוגל. ניתן להפשיר במקרר או בטמפרטורת חדר.",
+  },
+  freezer: {
+    label: "מקפיא ביתי",
+    recommendedMonths: 6,
+    maxMonths: 12,
+    recommendedLabel: "6 חודשים",
+    maxLabel: "עד 12 חודשים",
+    note: "לאחסן בחלק האחורי של המקפיא.",
+  },
+  deep_freezer: {
+    label: "הקפאה עמוקה",
+    recommendedMonths: 6,
+    maxMonths: 12,
+    recommendedLabel: "6 חודשים",
+    maxLabel: "עד 12 חודשים",
+    note: "במקפיא בעל דלת נפרדת או מקפיא נפרד, מינוס 18 מעלות.",
+  },
+};
 
 const GUEST_USER = {
   id: "guest",
@@ -1165,7 +1217,7 @@ function renderMilkRuleWarning() {
 
   const feeding = state.feedings.find((item) => item.id === els.milkTargetId.value);
   const pump = findEvent("pump", feeding?.pumpId || pendingBottlePumpId);
-  const warnings = [];
+  const warnings = [...evaluatePumpWarnings(pump)];
   const remaining = pump ? formatPumpRemaining(pump, feeding?.id || "") : "";
   if (remaining) warnings.push(`נשאר בשאיבה הזו: ${remaining}`);
   const validationError = validateBottleAmountAgainstPump(
@@ -1317,6 +1369,7 @@ function saveMilkDialog() {
   if (mode === "pump") {
     const now = new Date().toISOString();
     const storage = els.pumpStorageGroup.querySelector('input[name="pumpStorage"]:checked')?.value || "room";
+    const storageDates = buildPumpStorageDates({ storage, createdAt });
     const pump = {
       id: crypto.randomUUID(),
       pumpCode: createPumpCode(),
@@ -1324,7 +1377,8 @@ function saveMilkDialog() {
       amountUnit: unit,
       storage,
       createdAt,
-      expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
+      recommendedUntil: storageDates.recommendedUntil,
+      expiresAt: storageDates.expiresAt,
       createdBy: currentUser.id,
       updatedAt: now,
       updatedBy: currentUser.id,
@@ -1577,14 +1631,19 @@ function renderDiapers() {
 }
 
 function renderHistory() {
-  const feedingEvents = state.feedings.map((feeding) => ({
-    type: "feeding",
-    id: feeding.id,
-    at: feeding.startedAt,
-    title: isBottleFeeding(feeding) ? feedingSummary(feeding) : `הנקה: ${feedingSummary(feeding)}`,
-    icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
-    duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
-  }));
+  const feedingEvents = state.feedings.map((feeding) => {
+    const warnings = evaluateBottleWarnings(feeding);
+    return {
+      type: "feeding",
+      id: feeding.id,
+      at: feeding.startedAt,
+      title: isBottleFeeding(feeding) ? feedingSummary(feeding) : `הנקה: ${feedingSummary(feeding)}`,
+      icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
+      duration: feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
+      warning: warnings[0] || "",
+      expired: warnings[0]?.includes("חמורה") || false,
+    };
+  });
   const diaperEvents = state.diapers.map((diaper) => ({
     type: "diaper",
     id: diaper.id,
@@ -1602,6 +1661,7 @@ function renderHistory() {
     duration: "",
   }));
   const pumpEvents = state.pumps.map((pump) => {
+    const warnings = evaluatePumpWarnings(pump);
     const expired = isPumpExpired(pump);
     return {
       type: "pump",
@@ -1609,7 +1669,8 @@ function renderHistory() {
       at: pump.createdAt,
       title: `שאיבה ${pumpCode(pump)}${formatAmount(pump) ? ` · ${formatAmount(pump)}` : ""}`,
       icon: "⇢",
-      duration: pump.storage === "fridge" ? "במקרר" : expired ? "פג תוקף" : `בתוקף עד ${formatTime(pump.expiresAt)}`,
+      duration: `${milkStorageLabel(pump.storage)} · ${formatMilkStorageStatus(pump)}`,
+      warning: warnings[0] || "",
       expired,
     };
   });
@@ -1621,12 +1682,13 @@ function renderHistory() {
     ? events
         .map(
           (event) => `
-            <li class="${event.expired ? "is-expired" : ""}">
+            <li class="${event.expired ? "is-expired" : event.warning ? "is-warning" : ""}">
               <div class="history-leading">
                 <span class="history-icon" aria-hidden="true">${event.icon}</span>
                 <div class="history-main">
                   <strong>${event.title}</strong>
                   <span>${formatFullDate(event.at)}</span>
+                  ${event.warning ? `<span class="history-warning">${event.warning}</span>` : ""}
                 </div>
               </div>
               <div class="history-meta">
@@ -1805,6 +1867,7 @@ function saveBottleEntry(id, createdAt) {
 
 function savePumpEntry(id, createdAt) {
   const storage = els.entryStorageInput.value;
+  const storageDates = buildPumpStorageDates({ storage, createdAt });
   upsertById(state.pumps, {
     id: id || crypto.randomUUID(),
     pumpCode: findEvent("pump", id)?.pumpCode || createPumpCode(),
@@ -1812,7 +1875,8 @@ function savePumpEntry(id, createdAt) {
     amountUnit: els.entryAmountUnitInput.value || "ml",
     storage,
     createdAt,
-    expiresAt: storage === "room" ? new Date(new Date(createdAt).getTime() + ROOM_MILK_EXPIRY_MS).toISOString() : "",
+    recommendedUntil: storageDates.recommendedUntil,
+    expiresAt: storageDates.expiresAt,
     createdBy: findEvent("pump", id)?.createdBy || currentUser.id,
   });
 }
@@ -1949,7 +2013,65 @@ function getLatestBreastFeeding() {
 }
 
 function isPumpExpired(pump) {
-  return Boolean(pump.expiresAt && new Date(pump.expiresAt).getTime() <= Date.now());
+  return getMilkStorageStatus(pump).level === "expired";
+}
+
+function getMilkStorageRule(storage) {
+  return MILK_STORAGE_RULES[storage] || MILK_STORAGE_RULES.room;
+}
+
+function milkStorageLabel(storage) {
+  return getMilkStorageRule(storage).label;
+}
+
+function addMonths(date, months) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function getMilkStorageLimits(pump) {
+  if (!pump?.createdAt) return { recommendedAt: null, maxAt: null, rule: getMilkStorageRule(pump?.storage) };
+
+  const createdAt = new Date(pump.createdAt);
+  const rule = getMilkStorageRule(pump.storage);
+  const recommendedAt = rule.recommendedMonths
+    ? addMonths(createdAt, rule.recommendedMonths)
+    : new Date(createdAt.getTime() + rule.recommendedMs);
+  const maxAt = rule.maxMonths
+    ? addMonths(createdAt, rule.maxMonths)
+    : new Date(createdAt.getTime() + rule.maxMs);
+
+  return { recommendedAt, maxAt, rule };
+}
+
+function getMilkStorageStatus(pump, at = new Date()) {
+  const { recommendedAt, maxAt, rule } = getMilkStorageLimits(pump);
+  if (!recommendedAt || !maxAt) return { level: "unknown", rule, recommendedAt, maxAt };
+
+  const checkedAt = new Date(at);
+  if (checkedAt.getTime() >= maxAt.getTime()) return { level: "expired", rule, recommendedAt, maxAt };
+  if (checkedAt.getTime() >= recommendedAt.getTime() && recommendedAt.getTime() < maxAt.getTime()) {
+    return { level: "warning", rule, recommendedAt, maxAt };
+  }
+  return { level: "ok", rule, recommendedAt, maxAt };
+}
+
+function getPumpExpiryAt(pump) {
+  return getMilkStorageLimits(pump).maxAt;
+}
+
+function getPumpRecommendedAt(pump) {
+  return getMilkStorageLimits(pump).recommendedAt;
+}
+
+function buildPumpStorageDates(pump) {
+  const recommendedAt = getPumpRecommendedAt(pump);
+  const expiresAt = getPumpExpiryAt(pump);
+  return {
+    recommendedUntil: recommendedAt ? recommendedAt.toISOString() : "",
+    expiresAt: expiresAt ? expiresAt.toISOString() : "",
+  };
 }
 
 function getPumpOptions() {
@@ -1974,17 +2096,40 @@ function pumpOptionLabel(pump) {
   if (amount) parts.push(amount);
   const remaining = formatPumpRemaining(pump);
   if (remaining) parts.push(`נשאר ${remaining}`);
-  parts.push(pump.storage === "fridge" ? "במקרר" : "בחוץ");
+  parts.push(milkStorageLabel(pump.storage));
   return parts.join(" · ");
 }
 
-function evaluatePumpWarnings(pump) {
+function evaluatePumpWarnings(pump, at = new Date()) {
   if (!pump) return ["לא נבחרה שאיבה."];
-  const warnings = [];
-  if (pump.storage === "room" && isPumpExpired(pump)) {
-    warnings.push("אזהרה: השאיבה הזו סומנה כחלב שהיה בחוץ ועברו יותר מ-4 שעות.");
+  const status = getMilkStorageStatus(pump, at);
+  const note = status.rule.note ? ` ${status.rule.note}` : "";
+  if (status.level === "expired") {
+    return [
+      `אזהרה חמורה: ${status.rule.label} עבר את משך האחסון האפשרי (${status.rule.maxLabel}). לא מומלץ לתת בבקבוק.${note}`,
+    ];
   }
-  return warnings;
+  if (status.level === "warning") {
+    return [
+      `אזהרה: ${status.rule.label} עבר את משך האחסון המומלץ (${status.rule.recommendedLabel}) ועדיין בתוך הטווח האפשרי (${status.rule.maxLabel}).${note}`,
+    ];
+  }
+  return [];
+}
+
+function evaluateBottleWarnings(feeding) {
+  if (!isBottleFeeding(feeding)) return [];
+  const pump = findEvent("pump", feeding.pumpId);
+  if (!pump) return ["אזהרה: הבקבוק לא מקושר לשאיבה."];
+  return evaluatePumpWarnings(pump, new Date(feeding.startedAt || feeding.endedAt || Date.now()));
+}
+
+function formatMilkStorageStatus(pump) {
+  const status = getMilkStorageStatus(pump);
+  if (status.level === "unknown") return milkStorageLabel(pump?.storage);
+  if (status.level === "expired") return "פג תוקף";
+  if (status.level === "warning") return `עבר מומלץ · אפשרי עד ${formatDateOnly(status.maxAt)} ${formatTime(status.maxAt)}`;
+  return `בתוקף עד ${formatDateOnly(status.maxAt)} ${formatTime(status.maxAt)}`;
 }
 
 function validateBottleAmountAgainstPump(pump, amount, unit, excludeFeedingId = "") {
@@ -2118,6 +2263,7 @@ function buildExportRows() {
     "משך": feeding.endedAt ? formatHumanDuration(new Date(feeding.endedAt) - new Date(feeding.startedAt)) : "פעילה עכשיו",
     "כמות": formatAmount(feeding),
     "תוקף": "",
+    "אזהרה": evaluateBottleWarnings(feeding)[0] || "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
   const diaperRows = state.diapers.map((diaper) => ({
@@ -2131,6 +2277,7 @@ function buildExportRows() {
     "משך": "",
     "כמות": "",
     "תוקף": "",
+    "אזהרה": "",
     "נוצר על ידי": diaper.createdBy || "",
   }));
   const bottleRows = state.bottles.map((bottle) => ({
@@ -2144,19 +2291,21 @@ function buildExportRows() {
     "משך": "",
     "כמות": formatAmount(bottle),
     "תוקף": "",
+    "אזהרה": bottle.pumpId ? evaluatePumpWarnings(findEvent("pump", bottle.pumpId), new Date(bottle.createdAt))[0] || "" : "",
     "נוצר על ידי": bottle.createdBy || "",
   }));
   const pumpRows = state.pumps.map((pump) => ({
     _sortAt: pump.createdAt,
     "סוג פעולה": "שאיבה",
-    "פירוט": `${pumpCode(pump)} · ${pump.storage === "fridge" ? "נשמר במקרר" : "נשמר בחוץ"}`,
+    "פירוט": `${pumpCode(pump)} · ${milkStorageLabel(pump.storage)}`,
     "שאיבה מקושרת": pumpCode(pump),
     "תאריך": formatDateOnly(pump.createdAt),
     "שעת התחלה": formatTime(pump.createdAt),
     "שעת סיום": "",
     "משך": "",
     "כמות": formatAmount(pump),
-    "תוקף": pump.expiresAt ? `${formatDateOnly(pump.expiresAt)} ${formatTime(pump.expiresAt)}` : "מקרר",
+    "תוקף": formatMilkStorageStatus(pump),
+    "אזהרה": evaluatePumpWarnings(pump)[0] || "",
     "נוצר על ידי": pump.createdBy || "",
   }));
 
@@ -2164,7 +2313,7 @@ function buildExportRows() {
 }
 
 function toCsv(rows) {
-  const headers = ["סוג פעולה", "פירוט", "שאיבה מקושרת", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "נוצר על ידי"];
+  const headers = ["סוג פעולה", "פירוט", "שאיבה מקושרת", "תאריך", "שעת התחלה", "שעת סיום", "משך", "כמות", "תוקף", "אזהרה", "נוצר על ידי"];
   const lines = [headers.join(",")];
   rows.forEach((row) => {
     lines.push(headers.map((header) => csvEscape(row[header])).join(","));
