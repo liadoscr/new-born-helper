@@ -125,8 +125,6 @@ const els = {
   entryDessertAttemptInput: document.querySelector("#entryDessertAttemptInput"),
   entryDessertAttemptRow: document.querySelector("#entryDessertAttemptRow"),
   entryDessertInput: document.querySelector("#entryDessertInput"),
-  entryDessertEndInput: document.querySelector("#entryDessertEndInput"),
-  entryDessertEndRow: document.querySelector("#entryDessertEndRow"),
   entryDiaperInput: document.querySelector("#entryDiaperInput"),
   entryDialog: document.querySelector("#entryDialog"),
   entryDialogTitle: document.querySelector("#entryDialogTitle"),
@@ -1279,17 +1277,9 @@ function toggleDessert() {
     active.dessertAt = active.dessertStartedAt;
     active.dessertAttemptEndedAt = active.dessertStartedAt;
     showUndo(`הקינוח התחיל בפועל מצד ${sideLabel(active.dessertSide)}`, () => restoreFeeding(previous));
-  } else if (!active.dessertEndedAt) {
-    active.dessertEndedAt = new Date().toISOString();
-    showUndo(`הסתיים קינוח מצד ${sideLabel(active.dessertSide)}`, () => restoreFeeding(previous));
   } else {
-    delete active.dessertSide;
-    delete active.dessertAt;
-    delete active.dessertAttemptStartedAt;
-    delete active.dessertAttemptEndedAt;
-    delete active.dessertStartedAt;
-    delete active.dessertEndedAt;
-    showUndo("הקינוח הוסר", () => restoreFeeding(previous));
+    stopFeeding();
+    return;
   }
 
   touchRecord(active);
@@ -1534,7 +1524,7 @@ function renderFeeding(active, latest, latestStarted) {
       els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
       els.stopButton.textContent = "סיום הנקה";
       els.dessertButton.textContent = dessertButtonLabel(active, dessertSide);
-      els.dessertButton.hidden = false;
+      els.dessertButton.hidden = Boolean(active.dessertStartedAt);
     }
   } else {
     els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
@@ -1844,7 +1834,6 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryDessertInput.checked = Boolean(item?.dessertSide);
   els.entryDessertAttemptInput.value = item?.dessertAttemptStartedAt ? toTimeInputValue(new Date(item.dessertAttemptStartedAt)) : "";
   els.entryDessertStartInput.value = item?.dessertStartedAt || item?.dessertAt ? toTimeInputValue(new Date(item.dessertStartedAt || item.dessertAt)) : "";
-  els.entryDessertEndInput.value = item?.dessertEndedAt ? toTimeInputValue(new Date(item.dessertEndedAt)) : "";
   els.entryFeedingAmountInput.value = amountValue(item);
   els.entryFeedingUnitInput.value = amountUnit(item);
   els.entryDiaperInput.value = item?.type || "pee";
@@ -1867,7 +1856,6 @@ function renderEntryDialogFields() {
   const showDessertTimes = type === "feeding" && !isBottleSide && els.entryDessertInput.checked;
   els.entryDessertAttemptRow.hidden = !showDessertTimes;
   els.entryDessertStartRow.hidden = !showDessertTimes;
-  els.entryDessertEndRow.hidden = !showDessertTimes;
   els.entryFeedingAmountRow.hidden = !isBottleSide;
   els.entryFeedingUnitRow.hidden = !isBottleSide;
   els.entryStorageRow.hidden = type !== "pump";
@@ -1902,7 +1890,6 @@ function saveFeedingEntry(id, startedAt) {
   const hasDessert = !isBottle && els.entryDessertInput.checked;
   const dessertAttemptTime = els.entryDessertAttemptInput.value;
   const dessertStartTime = els.entryDessertStartInput.value;
-  const dessertEndTime = els.entryDessertEndInput.value;
   const dessertAttemptStartedAt =
     hasDessert && dessertAttemptTime
       ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, dessertAttemptTime))
@@ -1914,10 +1901,8 @@ function saveFeedingEntry(id, startedAt) {
         ? endedAt || startedAt
         : "";
   const dessertEndedAt =
-    hasDessert && dessertStartedAt && dessertEndTime
-      ? normalizeEndDate(dessertStartedAt || startedAt, combineDateAndTime(els.entryDateInput.value, dessertEndTime))
-      : hasDessert && dessertStartedAt
-        ? endedAt
+    hasDessert && dessertStartedAt
+      ? endedAt
       : "";
   const payload = {
     id: id || crypto.randomUUID(),
@@ -2104,8 +2089,7 @@ function feedingDurationLabel(feeding) {
 function dessertButtonLabel(feeding, fallbackSide) {
   if (!feeding.dessertSide) return `התחלת קינוח ${sideLabel(fallbackSide)}`;
   if (!feeding.dessertStartedAt) return `הקינוח התחיל בפועל ${sideLabel(feeding.dessertSide)}`;
-  if (!feeding.dessertEndedAt) return `סיום קינוח ${sideLabel(feeding.dessertSide)}`;
-  return `בטל קינוח ${sideLabel(feeding.dessertSide)}`;
+  return "סיום הנקה";
 }
 
 function dessertLiveLabel(feeding) {
