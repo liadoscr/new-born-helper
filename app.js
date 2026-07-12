@@ -8,6 +8,7 @@ const POOP_GOAL = 3;
 const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
 const AUTH_STORAGE_KEY = "lullaby-log-auth-user-v1";
 const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
+const CLOUD_DIRTY_STORAGE_PREFIX = "newborn-helper-cloud-dirty-v1";
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
@@ -107,7 +108,7 @@ let cloudMemberEmails = [];
 let cloudWriteTimer = null;
 let cloudWritePromise = null;
 let cloudWriteQueued = false;
-let cloudLocalDirty = false;
+let cloudLocalDirty = loadCloudDirty(currentUser);
 let cloudApplyingRemote = false;
 let cloudStatusText = "";
 let pendingFamilyInvitation = null;
@@ -327,6 +328,27 @@ function notificationKeyFor(user) {
   return `${NOTIFICATION_STORAGE_PREFIX}:user:${user.id}`;
 }
 
+function cloudDirtyKeyFor(user) {
+  return `${CLOUD_DIRTY_STORAGE_PREFIX}:user:${user.id}`;
+}
+
+function loadCloudDirty(user) {
+  if (!user || user.provider === "guest") return false;
+  return localStorage.getItem(cloudDirtyKeyFor(user)) === "1";
+}
+
+function markCloudDirty(user = currentUser) {
+  if (!user || user.provider === "guest") return;
+  cloudLocalDirty = true;
+  localStorage.setItem(cloudDirtyKeyFor(user), "1");
+}
+
+function clearCloudDirty(user = currentUser) {
+  if (!user || user.provider === "guest") return;
+  cloudLocalDirty = false;
+  localStorage.removeItem(cloudDirtyKeyFor(user));
+}
+
 function loadAuthUser() {
   try {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -377,7 +399,7 @@ function normalizeState(value) {
 function saveState() {
   localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
   if (!cloudApplyingRemote) {
-    cloudLocalDirty = true;
+    markCloudDirty();
     scheduleCloudWrite(0);
     if (!cloudDocRef && currentUser.provider !== "guest") {
       connectCloudSync().catch(() => {});
@@ -392,6 +414,7 @@ function switchUser(user) {
   currentUser = user;
   saveAuthUser(user);
   state = loadState(user);
+  cloudLocalDirty = loadCloudDirty(user);
   clearUndo();
   clearNextFeedingNotification();
   renderAuth();
@@ -629,7 +652,7 @@ function stopCloudSync({ preserveLocalDirty = false } = {}) {
   cloudWriteTimer = null;
   cloudWritePromise = null;
   cloudWriteQueued = false;
-  if (!preserveLocalDirty) cloudLocalDirty = false;
+  if (!preserveLocalDirty) cloudLocalDirty = loadCloudDirty(currentUser);
 
   if (cloudUnsubscribe) {
     cloudUnsubscribe();
@@ -682,11 +705,11 @@ async function connectCloudSync() {
   if (cloudDocRef && cloudDocRef.path === nextDocRef.path && cloudUnsubscribe) {
     cloudMemberEmails = memberEmails;
     await refreshCloudFromServer({ force: true });
-    if (cloudLocalDirty) scheduleCloudWrite(0);
+    if (loadCloudDirty(currentUser)) scheduleCloudWrite(0);
     return;
   }
 
-  stopCloudSync({ preserveLocalDirty: cloudLocalDirty });
+  stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
   cloudDocRef = nextDocRef;
   cloudMemberEmails = memberEmails;
   setCloudStatus("מתחבר לענן...", "פותח סנכרון בזמן אמת מול Firestore.");
@@ -694,7 +717,7 @@ async function connectCloudSync() {
   try {
     await ensureCloudDocReady();
   } catch (error) {
-    stopCloudSync({ preserveLocalDirty: cloudLocalDirty });
+    stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
     setCloudStatus("נשמר מקומית", `לא הצלחתי ליצור מסמך סנכרון: ${error.message}`);
     return;
   }
@@ -704,13 +727,13 @@ async function connectCloudSync() {
     { includeMetadataChanges: true },
     (snapshot) => handleCloudSnapshot(snapshot),
     (error) => {
-      stopCloudSync({ preserveLocalDirty: cloudLocalDirty });
+      stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
       setCloudStatus("נשמר מקומית", `שגיאת סנכרון Firestore: ${error.message}`);
     },
   );
 
   await refreshCloudFromServer({ force: true });
-  if (cloudLocalDirty) scheduleCloudWrite(0);
+  if (loadCloudDirty(currentUser)) scheduleCloudWrite(0);
 }
 
 async function refreshCloudOnResume() {
@@ -789,7 +812,7 @@ async function ensureCloudDocReady() {
 function scheduleCloudWrite(delay = CLOUD_WRITE_DEBOUNCE_MS) {
   if (cloudApplyingRemote || currentUser.provider === "guest") return;
   if (!cloudDocRef) {
-    cloudLocalDirty = true;
+    markCloudDirty();
     return;
   }
 
@@ -816,10 +839,10 @@ function queueCloudWrite() {
 
   cloudWritePromise = writeCloudState()
     .then(() => {
-      if (!cloudWriteQueued) cloudLocalDirty = false;
+      if (!cloudWriteQueued) clearCloudDirty();
     })
     .catch((error) => {
-      cloudLocalDirty = true;
+      markCloudDirty();
       setCloudStatus("שגיאת סנכרון", `לא הצלחתי לשמור בענן: ${error.message}`);
     })
     .finally(() => {
@@ -834,18 +857,18 @@ function queueCloudWrite() {
 }
 
 function flushCloudWriteBeforeSleep() {
-  if (!cloudLocalDirty && !cloudWriteTimer) return;
+  if (!loadCloudDirty(currentUser) && !cloudWriteTimer) return;
   clearTimeout(cloudWriteTimer);
   cloudWriteTimer = null;
   queueCloudWrite();
 }
 
 async function writeCloudState() {
-  if (!cloudDocRef || cloudApplyingRemote) return;
+  if (!cloudDocRef || cloudApplyingRemote) throw new Error("סנכרון הענן עדיין לא מוכן");
 
   const services = await loadFirebaseServices();
   const firebaseUser = services?.auth.currentUser;
-  if (!services || !firebaseUser) return;
+  if (!services || !firebaseUser) throw new Error("צריך חיבור Google פעיל כדי לשמור בענן");
 
   const memberEmails = getCloudMemberEmails();
   cloudMemberEmails = memberEmails;
@@ -868,6 +891,7 @@ async function writeCloudState() {
   );
 
   setCloudStatus("מסונכרן בענן", partnerSyncLabel(memberEmails));
+  return true;
 }
 
 function handleCloudSnapshot(snapshot) {
