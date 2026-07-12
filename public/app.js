@@ -1,6 +1,6 @@
 const FEEDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const SLEEPY_REMINDER_MS = 5 * 60 * 1000;
-const AUTO_CLOSE_FEEDING_MS = 60 * 60 * 1000;
+const AUTO_CLOSE_FEEDING_MS = 20 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const PEE_GOAL = 5;
@@ -1685,7 +1685,7 @@ function autoCloseLongFeedings() {
 
   if (changed) {
     saveState();
-    showToast("הנקה נסגרה אוטומטית אחרי 60 דקות");
+    showToast("הנקה נסגרה אוטומטית אחרי 20 דקות");
   }
 }
 
@@ -1876,7 +1876,7 @@ function renderHistory() {
       icon: isBottleFeeding(feeding) ? "🍼" : "🤱",
       duration: feedingDurationLabel(feeding),
       details: feedingPhaseDetailsHtml(feeding),
-      warning: feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : warnings[0] || "",
+      warning: feeding.autoClosed ? "נסגר אוטומטית אחרי 20 דקות. האם שכחתם לסגור?" : warnings[0] || "",
       expired: warnings[0]?.includes("חמורה") || false,
     };
   });
@@ -2614,7 +2614,7 @@ function buildExportRows() {
     "פירוט זמנים": feedingPhaseRows(feeding).map((phase) => `${phase.label}: ${phase.range} (${phase.duration})`).join(" | "),
     "כמות": formatAmount(feeding),
     "תוקף": "",
-    "אזהרה": feeding.autoClosed ? "נסגר אוטומטית אחרי 60 דקות. האם שכחתם לסגור?" : evaluateBottleWarnings(feeding)[0] || "",
+    "אזהרה": feeding.autoClosed ? "נסגר אוטומטית אחרי 20 דקות. האם שכחתם לסגור?" : evaluateBottleWarnings(feeding)[0] || "",
     "נוצר על ידי": feeding.createdBy || "",
   }));
   const diaperRows = state.diapers.map((diaper) => ({
