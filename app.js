@@ -133,9 +133,9 @@ const els = {
   editActiveStartButton: document.querySelector("#editActiveStartButton"),
   entryAmountInput: document.querySelector("#entryAmountInput"),
   entryDateInput: document.querySelector("#entryDateInput"),
-  entryDessertAttemptInput: document.querySelector("#entryDessertAttemptInput"),
-  entryDessertAttemptRow: document.querySelector("#entryDessertAttemptRow"),
   entryDessertInput: document.querySelector("#entryDessertInput"),
+  entryDessertEndInput: document.querySelector("#entryDessertEndInput"),
+  entryDessertEndRow: document.querySelector("#entryDessertEndRow"),
   entryDiaperInput: document.querySelector("#entryDiaperInput"),
   entryDialog: document.querySelector("#entryDialog"),
   entryDialogTitle: document.querySelector("#entryDialogTitle"),
@@ -1395,18 +1395,14 @@ function toggleDessert() {
   const previous = clone(active);
   const dessertSide = oppositeSide(active.side);
   if (!active.dessertSide) {
+    const now = new Date().toISOString();
     active.dessertSide = dessertSide;
-    active.dessertAt = new Date().toISOString();
-    active.dessertAttemptStartedAt = active.dessertAt;
-    delete active.dessertStartedAt;
+    active.dessertAt = now;
+    active.dessertStartedAt = now;
     delete active.dessertEndedAt;
+    delete active.dessertAttemptStartedAt;
     delete active.dessertAttemptEndedAt;
-    showUndo(`התחיל ניסיון קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
-  } else if (!active.dessertStartedAt) {
-    active.dessertStartedAt = new Date().toISOString();
-    active.dessertAt = active.dessertStartedAt;
-    active.dessertAttemptEndedAt = active.dessertStartedAt;
-    showUndo(`הקינוח התחיל בפועל מצד ${sideLabel(active.dessertSide)}`, () => restoreFeeding(previous));
+    showUndo(`התחיל קינוח מצד ${sideLabel(dessertSide)}`, () => restoreFeeding(previous));
   } else {
     stopFeeding();
     return;
@@ -1457,9 +1453,7 @@ function validateActiveStartChange(feeding, nextStartedAt) {
 
   const firstLaterEvent = [
     ...(feeding.pauses || []).map((pause) => pause.startedAt),
-    feeding.dessertAttemptStartedAt,
-    feeding.dessertStartedAt,
-    feeding.dessertAt,
+    getDessertStartedAt(feeding),
   ]
     .filter(Boolean)
     .map((value) => new Date(value).getTime())
@@ -1622,11 +1616,12 @@ function closeOpenPause(feeding, endedAt = new Date().toISOString()) {
 
 function closeOpenDessert(feeding, endedAt = new Date().toISOString()) {
   if (!feeding?.dessertSide) return;
-  if (feeding.dessertStartedAt && !feeding.dessertEndedAt) {
-    feeding.dessertEndedAt = endedAt;
-  } else if (!feeding.dessertStartedAt && !feeding.dessertAttemptEndedAt) {
-    feeding.dessertAttemptEndedAt = endedAt;
-  }
+  const startedAt = getDessertStartedAt(feeding) || endedAt;
+  feeding.dessertStartedAt = startedAt;
+  feeding.dessertAt = startedAt;
+  if (!feeding.dessertEndedAt) feeding.dessertEndedAt = endedAt;
+  delete feeding.dessertAttemptStartedAt;
+  delete feeding.dessertAttemptEndedAt;
 }
 
 function addDiaper(type) {
@@ -1708,9 +1703,9 @@ function renderFeeding(active, latest, latestStarted) {
       const dessertText = active.dessertSide ? ` + ${dessertLiveLabel(active)}` : "";
       els.timerHint.textContent = `התחילה ב-${formatTime(active.startedAt)} מצד ${sideLabel(active.side)}${dessertText}`;
       els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה להנקה" : "גרעפס / עצירה";
-      els.stopButton.textContent = "סיום הנקה";
+      els.stopButton.textContent = active.dessertSide ? "סיום קינוח והנקה" : "סיום הנקה";
       els.dessertButton.textContent = dessertButtonLabel(active, dessertSide);
-      els.dessertButton.hidden = Boolean(active.dessertStartedAt);
+      els.dessertButton.hidden = Boolean(active.dessertSide);
     }
   } else {
     els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
@@ -2018,8 +2013,10 @@ function openEntryDialog(type = "feeding", id = "") {
   els.entryEndTimeInput.value = item?.endedAt ? toTimeInputValue(new Date(item.endedAt)) : "";
   els.entrySideInput.value = item?.side || "right";
   els.entryDessertInput.checked = Boolean(item?.dessertSide);
-  els.entryDessertAttemptInput.value = item?.dessertAttemptStartedAt ? toTimeInputValue(new Date(item.dessertAttemptStartedAt)) : "";
-  els.entryDessertStartInput.value = item?.dessertStartedAt || item?.dessertAt ? toTimeInputValue(new Date(item.dessertStartedAt || item.dessertAt)) : "";
+  els.entryDessertStartInput.value = getDessertStartedAt(item) ? toTimeInputValue(new Date(getDessertStartedAt(item))) : "";
+  els.entryDessertEndInput.value = item?.dessertEndedAt || (item?.dessertSide && item?.endedAt)
+    ? toTimeInputValue(new Date(item.dessertEndedAt || item.endedAt))
+    : "";
   els.entryFeedingAmountInput.value = amountValue(item);
   els.entryFeedingUnitInput.value = amountUnit(item);
   els.entryDiaperInput.value = item?.type || "pee";
@@ -2040,8 +2037,8 @@ function renderEntryDialogFields() {
   });
   els.entryDessertLabel.hidden = isBottleSide;
   const showDessertTimes = type === "feeding" && !isBottleSide && els.entryDessertInput.checked;
-  els.entryDessertAttemptRow.hidden = !showDessertTimes;
   els.entryDessertStartRow.hidden = !showDessertTimes;
+  els.entryDessertEndRow.hidden = !showDessertTimes;
   els.entryFeedingAmountRow.hidden = !isBottleSide;
   els.entryFeedingUnitRow.hidden = !isBottleSide;
   els.entryStorageRow.hidden = type !== "pump";
@@ -2071,25 +2068,26 @@ function saveEntryDialog() {
 function saveFeedingEntry(id, startedAt) {
   const side = els.entrySideInput.value;
   const endTime = els.entryEndTimeInput.value;
-  const endedAt = endTime ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, endTime)) : "";
+  let endedAt = endTime ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, endTime)) : "";
   const isBottle = side === "bottle";
   const hasDessert = !isBottle && els.entryDessertInput.checked;
-  const dessertAttemptTime = els.entryDessertAttemptInput.value;
   const dessertStartTime = els.entryDessertStartInput.value;
-  const dessertAttemptStartedAt =
-    hasDessert && dessertAttemptTime
-      ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, dessertAttemptTime))
-      : "";
+  const dessertEndTime = els.entryDessertEndInput.value;
   const dessertStartedAt =
     hasDessert && dessertStartTime
-      ? normalizeEndDate(dessertAttemptStartedAt || startedAt, combineDateAndTime(els.entryDateInput.value, dessertStartTime))
-      : hasDessert && !dessertAttemptTime
+      ? normalizeEndDate(startedAt, combineDateAndTime(els.entryDateInput.value, dessertStartTime))
+      : hasDessert
         ? endedAt || startedAt
         : "";
   const dessertEndedAt =
-    hasDessert && dessertStartedAt
-      ? endedAt
+    hasDessert && dessertStartedAt && dessertEndTime
+      ? normalizeEndDate(dessertStartedAt, combineDateAndTime(els.entryDateInput.value, dessertEndTime))
+      : hasDessert && dessertStartedAt
+        ? endedAt
       : "";
+  if (hasDessert && dessertEndedAt && (!endedAt || new Date(dessertEndedAt) > new Date(endedAt))) {
+    endedAt = dessertEndedAt;
+  }
   const payload = {
     id: id || crypto.randomUUID(),
     side,
@@ -2099,8 +2097,6 @@ function saveFeedingEntry(id, startedAt) {
     amountUnit: isBottle ? els.entryFeedingUnitInput.value || "ml" : "",
     dessertSide: hasDessert ? oppositeSide(side) : "",
     dessertAt: dessertStartedAt,
-    dessertAttemptStartedAt,
-    dessertAttemptEndedAt: dessertAttemptStartedAt ? dessertStartedAt || endedAt : "",
     dessertStartedAt,
     dessertEndedAt,
     pauses: findEvent("feeding", id)?.pauses || [],
@@ -2274,17 +2270,11 @@ function feedingDurationLabel(feeding) {
 
 function dessertButtonLabel(feeding, fallbackSide) {
   if (!feeding.dessertSide) return `התחלת קינוח ${sideLabel(fallbackSide)}`;
-  if (!feeding.dessertStartedAt) return `הקינוח התחיל בפועל ${sideLabel(feeding.dessertSide)}`;
-  return "סיום הנקה";
+  return "סיום קינוח והנקה";
 }
 
 function dessertLiveLabel(feeding) {
   if (!feeding.dessertSide) return "";
-  if (!feeding.dessertStartedAt) {
-    const startedAt = feeding.dessertAttemptStartedAt || feeding.dessertAt;
-    const duration = startedAt ? ` (${formatHumanDuration(new Date() - new Date(startedAt))})` : "";
-    return `ניסיון קינוח ${sideLabel(feeding.dessertSide)} פעיל${duration}`;
-  }
   return `קינוח ${sideLabel(feeding.dessertSide)} ${dessertDurationLabel(feeding)}`;
 }
 
@@ -2296,26 +2286,24 @@ function dessertDurationLabel(feeding) {
 }
 
 function dessertDurationMs(feeding) {
-  const startedAt = feeding?.dessertStartedAt || (!feeding?.dessertAttemptStartedAt ? feeding?.dessertAt : "");
+  const startedAt = getDessertStartedAt(feeding);
   if (!startedAt) return NaN;
   const endedAt = feeding.dessertEndedAt || feeding.endedAt || new Date().toISOString();
   return new Date(endedAt) - new Date(startedAt);
 }
 
+function getDessertStartedAt(feeding) {
+  return feeding?.dessertStartedAt || feeding?.dessertAt || feeding?.dessertAttemptStartedAt || "";
+}
+
 function feedingPhaseRows(feeding) {
   if (!feeding?.startedAt || isBottleFeeding(feeding)) return [];
   const rows = [];
-  const mainEndsAt = feeding.dessertAttemptStartedAt || feeding.dessertStartedAt || feeding.endedAt || new Date().toISOString();
+  const dessertStartedAt = getDessertStartedAt(feeding);
+  const mainEndsAt = dessertStartedAt || feeding.endedAt || new Date().toISOString();
   rows.push(createPhaseRow("main", `הנקה ${sideLabel(feeding.side)}`, feeding.startedAt, mainEndsAt));
 
   if (feeding.dessertSide) {
-    const attemptStartedAt = feeding.dessertAttemptStartedAt || (!feeding.dessertStartedAt ? feeding.dessertAt : "");
-    const attemptEndedAt = feeding.dessertAttemptEndedAt || feeding.dessertStartedAt || (!feeding.dessertStartedAt ? feeding.endedAt : "") || "";
-    if (attemptStartedAt && attemptEndedAt) {
-      rows.push(createPhaseRow("dessert-attempt", `ניסיון קינוח ${sideLabel(feeding.dessertSide)}`, attemptStartedAt, attemptEndedAt));
-    }
-
-    const dessertStartedAt = feeding.dessertStartedAt || (!feeding.dessertAttemptStartedAt ? feeding.dessertAt : "");
     const dessertEndedAt = feeding.dessertEndedAt || feeding.endedAt || "";
     if (dessertStartedAt && dessertEndedAt) {
       rows.push(createPhaseRow("dessert", `קינוח ${sideLabel(feeding.dessertSide)}`, dessertStartedAt, dessertEndedAt));
