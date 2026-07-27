@@ -1167,7 +1167,7 @@ p {
   direction: ltr;
   color: #e0e0ff;
   font-size: clamp(3.4rem, 18vw, 5rem);
-  line-height: 1;
+  line-height: 1.16;
   text-shadow: 0 0 18px rgba(189, 194, 255, 0.32);
 }
 
@@ -1671,7 +1671,7 @@ body {
 .main-timer {
   color: var(--foreground);
   font-size: clamp(4rem, 18vw, 5.8rem);
-  line-height: 1;
+  line-height: 1.16;
   text-shadow: none;
 }
 
