@@ -13,6 +13,7 @@ const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
 const CLOUD_REFRESH_THROTTLE_MS = 10 * 1000;
+const CLOUD_VISIBLE_REFRESH_MS = 30 * 1000;
 
 const MILK_STORAGE_RULES = {
   room: {
@@ -95,7 +96,6 @@ let currentUser = loadAuthUser();
 let state = loadState(currentUser);
 let undo = null;
 let undoTimer = null;
-let deferredInstallPrompt = null;
 let nextFeedingNotificationTimer = null;
 let scheduledNotificationAt = "";
 let pendingBottlePumpId = "";
@@ -114,6 +114,7 @@ let cloudStatusText = "";
 let pendingFamilyInvitation = null;
 let cloudLastRefreshAt = 0;
 let cloudRefreshPromise = null;
+let manualSyncInProgress = false;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -165,7 +166,7 @@ const els = {
   familyInviteText: document.querySelector("#familyInviteText"),
   googleSignInButton: document.querySelector("#googleSignInButton"),
   historyList: document.querySelector("#historyList"),
-  installButton: document.querySelector("#installButton"),
+  manualSyncButton: document.querySelector("#manualSyncButton"),
   lastDiaperText: document.querySelector("#lastDiaperText"),
   lastFeedText: document.querySelector("#lastFeedText"),
   leftSideStat: document.querySelector("#leftSideStat"),
@@ -256,7 +257,7 @@ function init() {
   els.undoButton.addEventListener("click", runUndo);
   els.exportButton.addEventListener("click", exportData);
   els.addManualButton.addEventListener("click", () => openEntryDialog());
-  els.installButton.addEventListener("click", installApp);
+  els.manualSyncButton.addEventListener("click", manualSyncNow);
   els.pumpButton.addEventListener("click", () => openMilkDialog("pump"));
   els.milkAmountInput.addEventListener("input", renderMilkRuleWarning);
   els.milkUnitInput.addEventListener("change", renderMilkRuleWarning);
@@ -291,13 +292,9 @@ function init() {
     if (els.activeStartDialog.returnValue === "save") saveActiveStartDialog();
   });
 
-  window.addEventListener("beforeinstallprompt", (event) => {
-    event.preventDefault();
-    deferredInstallPrompt = event;
-    els.installButton.hidden = false;
-  });
   window.addEventListener("focus", refreshCloudOnResume);
   window.addEventListener("online", refreshCloudOnResume);
+  window.addEventListener("pageshow", refreshCloudOnResume);
   window.addEventListener("pagehide", flushCloudWriteBeforeSleep);
   window.addEventListener("beforeunload", flushCloudWriteBeforeSleep);
   document.addEventListener("visibilitychange", () => {
@@ -318,6 +315,9 @@ function init() {
   initCloudAuth();
   render();
   setInterval(render, 1000);
+  setInterval(() => {
+    if (!document.hidden && navigator.onLine !== false) refreshCloudOnResume();
+  }, CLOUD_VISIBLE_REFRESH_MS);
 }
 
 function storageKeyFor(user) {
@@ -534,6 +534,7 @@ async function loadFirebaseServices() {
         arrayUnion: firestoreModule.arrayUnion,
         browserLocalPersistence: authModule.browserLocalPersistence,
         collection: firestoreModule.collection,
+        deleteField: firestoreModule.deleteField,
         doc: firestoreModule.doc,
         getRedirectResult: authModule.getRedirectResult,
         getDoc: firestoreModule.getDoc,
@@ -543,12 +544,14 @@ async function loadFirebaseServices() {
         onAuthStateChanged: authModule.onAuthStateChanged,
         onSnapshot: firestoreModule.onSnapshot,
         query: firestoreModule.query,
+        runTransaction: firestoreModule.runTransaction,
         serverTimestamp: firestoreModule.serverTimestamp,
         setDoc: firestoreModule.setDoc,
         setPersistence: authModule.setPersistence,
         signInWithRedirect: authModule.signInWithRedirect,
         signInWithPopup: authModule.signInWithPopup,
         signOut: authModule.signOut,
+        waitForPendingWrites: firestoreModule.waitForPendingWrites,
         where: firestoreModule.where,
       };
 
@@ -645,6 +648,7 @@ function setCloudStatus(status, detail = "") {
   cloudStatusText = status;
   if (els.syncStatus) els.syncStatus.textContent = status;
   if (detail && els.syncConfigStatus) els.syncConfigStatus.textContent = detail;
+  renderManualSyncButton();
 }
 
 function stopCloudSync({ preserveLocalDirty = false } = {}) {
@@ -747,7 +751,7 @@ async function refreshCloudOnResume() {
   }
 }
 
-async function refreshCloudFromServer({ force = false } = {}) {
+async function refreshCloudFromServer({ force = false, throwOnError = false } = {}) {
   if (!cloudDocRef || currentUser.provider === "guest") return;
 
   const now = Date.now();
@@ -775,6 +779,7 @@ async function refreshCloudFromServer({ force = false } = {}) {
     .catch((error) => {
       const status = navigator.onLine === false ? "ממתין לרשת" : "שגיאת סנכרון";
       setCloudStatus(status, `לא הצלחתי למשוך עדכונים מהענן: ${error.message}`);
+      if (throwOnError) throw error;
     })
     .finally(() => {
       cloudRefreshPromise = null;
@@ -797,7 +802,7 @@ async function ensureCloudDocReady() {
     cloudDocRef,
     {
       app: "newborn-helper",
-      schemaVersion: 2,
+      schemaVersion: 4,
       memberEmails,
       memberUids: services.arrayUnion(firebaseUser.uid),
       updatedAt: new Date().toISOString(),
@@ -856,6 +861,23 @@ function queueCloudWrite() {
   return cloudWritePromise;
 }
 
+async function waitForCloudWrites() {
+  clearTimeout(cloudWriteTimer);
+  cloudWriteTimer = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!loadCloudDirty(currentUser) && !cloudWritePromise && !cloudWriteQueued) return;
+
+    const pendingWrite = cloudWritePromise || queueCloudWrite();
+    if (pendingWrite) await pendingWrite;
+    await Promise.resolve();
+  }
+
+  if (loadCloudDirty(currentUser)) {
+    throw new Error("השינויים עדיין ממתינים להעלאה לענן");
+  }
+}
+
 function flushCloudWriteBeforeSleep() {
   if (!loadCloudDirty(currentUser) && !cloudWriteTimer) return;
   clearTimeout(cloudWriteTimer);
@@ -873,15 +895,22 @@ async function writeCloudState() {
   const memberEmails = getCloudMemberEmails();
   cloudMemberEmails = memberEmails;
   setCloudStatus("מעלה לענן...", "שומר את היומן המשותף.");
+  const localSnapshot = sanitizeStateForCloud(state);
 
   await services.setDoc(
     cloudDocRef,
     {
       app: "newborn-helper",
-      schemaVersion: 2,
+      schemaVersion: 4,
       memberEmails,
       memberUids: services.arrayUnion(firebaseUser.uid),
-      state: sanitizeStateForCloud(state),
+      memberStates: {
+        [firebaseUser.uid]: {
+          state: localSnapshot,
+          updatedAt: new Date().toISOString(),
+          updatedByEmail: currentUser.email || "",
+        },
+      },
       updatedAt: new Date().toISOString(),
       updatedByEmail: currentUser.email || "",
       updatedByUid: firebaseUser.uid,
@@ -890,8 +919,106 @@ async function writeCloudState() {
     { merge: true },
   );
 
-  setCloudStatus("מסונכרן בענן", partnerSyncLabel(memberEmails));
+  const committedState = await services.runTransaction(services.db, async (transaction) => {
+    const snapshot = await transaction.get(cloudDocRef);
+    const cloudData = snapshot.exists() ? snapshot.data() || {} : {};
+    const remoteState = mergeCloudDocumentState(cloudData);
+    const mergedState = mergeStates(localSnapshot, remoteState);
+    const mergedMemberEmails = normalizeEmailList([
+      ...memberEmails,
+      ...(cloudData.memberEmails || []),
+    ]);
+
+    transaction.set(
+      cloudDocRef,
+      {
+        app: "newborn-helper",
+        schemaVersion: 4,
+        memberEmails: mergedMemberEmails,
+        memberUids: services.arrayUnion(firebaseUser.uid),
+        memberStates: services.deleteField(),
+        state: sanitizeStateForCloud(mergedState),
+        updatedAt: new Date().toISOString(),
+        updatedByEmail: currentUser.email || "",
+        updatedByUid: firebaseUser.uid,
+        serverUpdatedAt: services.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    cloudMemberEmails = mergedMemberEmails;
+    return mergedState;
+  });
+
+  await services.waitForPendingWrites(services.db);
+
+  const latestLocalState = mergeStates(state, committedState);
+  const hasNewerLocalChanges = serializeStateForSync(latestLocalState) !== serializeStateForSync(committedState);
+  if (serializeStateForSync(latestLocalState) !== serializeStateForSync(state)) {
+    cloudApplyingRemote = true;
+    state = latestLocalState;
+    localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+    cloudApplyingRemote = false;
+    render();
+  }
+  if (hasNewerLocalChanges) cloudWriteQueued = true;
+
+  setCloudStatus("מסונכרן בענן", partnerSyncLabel(cloudMemberEmails));
   return true;
+}
+
+async function manualSyncNow() {
+  if (manualSyncInProgress) return;
+
+  if (currentUser.provider === "guest" || !currentUser.email) {
+    showView("settings");
+    showToast("צריך להתחבר עם Google כדי לסנכרן");
+    return;
+  }
+
+  if (navigator.onLine === false) {
+    setCloudStatus("ממתין לרשת", "הסנכרון ימשיך אוטומטית כשהחיבור יחזור.");
+    showToast("אין כרגע חיבור לאינטרנט");
+    return;
+  }
+
+  manualSyncInProgress = true;
+  renderManualSyncButton();
+
+  try {
+    setCloudStatus("מסנכרן עכשיו...", "מושך את הגרסה האחרונה ומאחד את היומן.");
+    await connectCloudSync();
+    if (!cloudDocRef) throw new Error("חיבור הענן עדיין לא מוכן");
+
+    await refreshCloudFromServer({ force: true, throwOnError: true });
+    markCloudDirty();
+    await waitForCloudWrites();
+    await refreshCloudFromServer({ force: true, throwOnError: true });
+
+    setCloudStatus("מסונכרן עכשיו", partnerSyncLabel(cloudMemberEmails));
+    showToast("היומן מסונכרן ומעודכן");
+  } catch (error) {
+    markCloudDirty();
+    const status = navigator.onLine === false ? "ממתין לרשת" : "שגיאת סנכרון";
+    setCloudStatus(status, `הסנכרון לא הושלם: ${error.message}`);
+    showToast("הסנכרון לא הושלם. ננסה שוב אוטומטית");
+  } finally {
+    manualSyncInProgress = false;
+    renderManualSyncButton();
+  }
+}
+
+function renderManualSyncButton() {
+  if (!els.manualSyncButton) return;
+
+  const isGuest = currentUser.provider === "guest";
+  els.manualSyncButton.disabled = manualSyncInProgress;
+  els.manualSyncButton.classList.toggle("is-syncing", manualSyncInProgress);
+  els.manualSyncButton.classList.toggle("is-guest", isGuest);
+  els.manualSyncButton.classList.toggle("has-error", /שגיאה|ממתין/.test(cloudStatusText));
+  const label = isGuest ? "התחברות כדי לסנכרן" : manualSyncInProgress ? "מסנכרן עכשיו" : "סנכרון עכשיו";
+  els.manualSyncButton.setAttribute("aria-label", label);
+  els.manualSyncButton.title = label;
 }
 
 function handleCloudSnapshot(snapshot) {
@@ -903,7 +1030,12 @@ function handleCloudSnapshot(snapshot) {
   }
 
   const data = snapshot.data() || {};
-  const remoteState = normalizeState(data.state || {});
+  const remoteState = mergeCloudDocumentState(data);
+  const hasFallbackMemberStates = Boolean(
+    data.memberStates
+    && typeof data.memberStates === "object"
+    && Object.keys(data.memberStates).length,
+  );
   const memberEmails = normalizeEmailList(data.memberEmails || cloudMemberEmails);
   if (memberEmails.length) {
     cloudMemberEmails = memberEmails;
@@ -925,7 +1057,9 @@ function handleCloudSnapshot(snapshot) {
     render();
   }
 
-  if (remoteChanged && !snapshot.metadata.hasPendingWrites) {
+  const shouldCompactFallback = hasFallbackMemberStates && !cloudWritePromise;
+  if ((remoteChanged || shouldCompactFallback) && !snapshot.metadata.hasPendingWrites) {
+    markCloudDirty();
     scheduleCloudWrite(0);
     return;
   }
@@ -1000,6 +1134,20 @@ async function createFamilyId(memberEmails) {
 
 function sanitizeStateForCloud(value) {
   return normalizeState(clone(value));
+}
+
+function mergeCloudDocumentState(data) {
+  let mergedState = normalizeState(data?.state || {});
+  const memberStates = data?.memberStates && typeof data.memberStates === "object"
+    ? Object.values(data.memberStates)
+    : [];
+
+  memberStates.forEach((memberState) => {
+    if (!memberState?.state) return;
+    mergedState = mergeStates(mergedState, normalizeState(memberState.state));
+  });
+
+  return mergedState;
 }
 
 function serializeStateForSync(value) {
@@ -1132,6 +1280,7 @@ function renderAuth() {
   els.googleSignInButton.hidden = !isGuest;
   els.signOutButton.hidden = isGuest;
   els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : cloudStatusText || `נשמר עבור ${currentUser.name}`;
+  renderManualSyncButton();
 }
 
 function renderSyncSettings() {
@@ -2687,13 +2836,6 @@ function toCsv(rows) {
 function csvEscape(value) {
   const text = String(value ?? "");
   return `"${text.replace(/"/g, '""')}"`;
-}
-
-async function installApp() {
-  if (!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
 }
 
 function sideLabel(side) {

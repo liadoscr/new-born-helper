@@ -111,6 +111,50 @@ p {
   font-size: 1.8rem;
 }
 
+.top-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.manual-sync-button {
+  position: relative;
+  color: var(--muted);
+}
+
+.manual-sync-button::after {
+  position: absolute;
+  inset: auto 6px 6px auto;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--secondary);
+  content: "";
+}
+
+.manual-sync-button.has-error::after {
+  background: #e09b65;
+}
+
+.manual-sync-button.is-guest::after {
+  background: var(--muted);
+}
+
+.manual-sync-button.is-syncing svg {
+  animation: sync-spin 850ms linear infinite;
+}
+
+.manual-sync-button:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .menu-open {
   overflow: hidden;
 }

@@ -5,7 +5,7 @@ import { extname, join, normalize, resolve } from "node:path";
 
 const root = resolve(".");
 const host = "127.0.0.1";
-const port = 5173;
+const port = Number(process.env.PORT || 5173);
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
