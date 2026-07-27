@@ -1089,17 +1089,36 @@ p {
   justify-content: flex-start;
   color: var(--secondary);
   font-weight: 900;
-  min-height: 24px;
+  width: 11rem;
   min-width: 11rem;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .sync-line #syncStatus {
-  display: inline-block;
-  max-width: 10rem;
+  display: block;
+  width: 9.5rem;
+  max-width: 9.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sync-line .live-dot {
+  flex: 0 0 auto;
+}
+
+#syncConfigStatus {
+  display: -webkit-box;
+  height: 2.9em;
+  min-height: 2.9em;
+  max-height: 2.9em;
+  overflow: hidden;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .status-with-dot {
@@ -1150,6 +1169,32 @@ p {
   font-size: clamp(3.4rem, 18vw, 5rem);
   line-height: 1;
   text-shadow: 0 0 18px rgba(189, 194, 255, 0.32);
+}
+
+.main-timer,
+.partner-timer {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.main-timer.is-long-duration {
+  font-size: 3.7rem;
+}
+
+.partner-timer.is-long-duration {
+  font-size: 3.2rem;
+}
+
+.main-timer.is-extra-long-duration {
+  font-size: 3.1rem;
+}
+
+.partner-timer.is-extra-long-duration {
+  font-size: 2.7rem;
 }
 
 .action-card {
@@ -1972,11 +2017,29 @@ body {
   }
 
   .sync-line {
+    width: 9rem;
     min-width: 9rem;
   }
 
   .sync-line #syncStatus {
+    width: 8.5rem;
     max-width: 8.5rem;
+  }
+
+  .main-timer.is-long-duration {
+    font-size: 3.25rem;
+  }
+
+  .partner-timer.is-long-duration {
+    font-size: 2.8rem;
+  }
+
+  .main-timer.is-extra-long-duration {
+    font-size: 2.75rem;
+  }
+
+  .partner-timer.is-extra-long-duration {
+    font-size: 2.35rem;
   }
 
   .app-canvas {

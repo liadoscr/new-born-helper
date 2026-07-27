@@ -114,6 +114,7 @@ let cloudStatusText = "";
 let pendingFamilyInvitation = null;
 let cloudLastRefreshAt = 0;
 let cloudRefreshPromise = null;
+let cloudConnectPromise = null;
 let manualSyncInProgress = false;
 
 const els = {
@@ -646,8 +647,10 @@ async function signOutFirebase() {
 
 function setCloudStatus(status, detail = "") {
   cloudStatusText = status;
-  if (els.syncStatus) els.syncStatus.textContent = status;
-  if (detail && els.syncConfigStatus) els.syncConfigStatus.textContent = detail;
+  if (els.syncStatus && els.syncStatus.textContent !== status) els.syncStatus.textContent = status;
+  if (detail && els.syncConfigStatus && /שגיאה|נשמר מקומית|ממתין/.test(status)) {
+    els.syncConfigStatus.textContent = detail;
+  }
   renderManualSyncButton();
 }
 
@@ -671,7 +674,19 @@ function stopCloudSync({ preserveLocalDirty = false } = {}) {
   cloudRefreshPromise = null;
 }
 
-async function connectCloudSync() {
+function connectCloudSync() {
+  if (cloudConnectPromise) return cloudConnectPromise;
+
+  const connectingUserId = currentUser.id;
+  cloudConnectPromise = connectCloudSyncInternal(connectingUserId)
+    .finally(() => {
+      cloudConnectPromise = null;
+    });
+  return cloudConnectPromise;
+}
+
+async function connectCloudSyncInternal(connectingUserId) {
+  const connectionIsStale = () => currentUser.id !== connectingUserId;
   clearTimeout(cloudWriteTimer);
 
   if (currentUser.provider === "guest" || !currentUser.email) {
@@ -680,6 +695,7 @@ async function connectCloudSync() {
   }
 
   const services = await loadFirebaseServices();
+  if (connectionIsStale()) return;
   if (!services) {
     renderSyncSettings();
     return;
@@ -695,12 +711,29 @@ async function connectCloudSync() {
 
   if (memberEmails.length === 1) {
     const discoveredFamily = await findExistingFamilyForCurrentUser(services);
+    if (connectionIsStale()) return;
     if (discoveredFamily) {
-      pendingFamilyInvitation = discoveredFamily;
-      setCloudStatus("ממתין לאישור משפחה", familyInviteLabel(discoveredFamily));
-      renderSyncSettings();
-      showView("sync");
-      return;
+      if (discoveredFamily.isExistingMember) {
+        state.sync.partnerEmails = discoveredFamily.memberEmails.filter(
+          (email) => email !== normalizeEmail(currentUser.email),
+        );
+        state.sync.declinedFamilyIds = state.sync.declinedFamilyIds.filter(
+          (id) => id !== discoveredFamily.id,
+        );
+        localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+        pendingFamilyInvitation = null;
+        memberEmails = discoveredFamily.memberEmails;
+        familyId = discoveredFamily.id;
+        setCloudStatus("המשפחה שוחזרה", partnerSyncLabel(memberEmails));
+        renderSyncSettings();
+      } else {
+        const isNewInvitation = pendingFamilyInvitation?.id !== discoveredFamily.id;
+        pendingFamilyInvitation = discoveredFamily;
+        setCloudStatus("ממתין לאישור משפחה", familyInviteLabel(discoveredFamily));
+        renderSyncSettings();
+        if (isNewInvitation) showView("sync");
+        return;
+      }
     }
   }
 
@@ -714,12 +747,15 @@ async function connectCloudSync() {
   }
 
   stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
+  if (connectionIsStale()) return;
   cloudDocRef = nextDocRef;
   cloudMemberEmails = memberEmails;
+  renderSyncSettings();
   setCloudStatus("מתחבר לענן...", "פותח סנכרון בזמן אמת מול Firestore.");
 
   try {
     await ensureCloudDocReady();
+    if (connectionIsStale()) return;
   } catch (error) {
     stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
     setCloudStatus("נשמר מקומית", `לא הצלחתי ליצור מסמך סנכרון: ${error.message}`);
@@ -737,6 +773,7 @@ async function connectCloudSync() {
   );
 
   await refreshCloudFromServer({ force: true });
+  if (connectionIsStale()) return;
   if (loadCloudDirty(currentUser)) scheduleCloudWrite(0);
 }
 
@@ -751,7 +788,7 @@ async function refreshCloudOnResume() {
   }
 }
 
-async function refreshCloudFromServer({ force = false, throwOnError = false } = {}) {
+async function refreshCloudFromServer({ force = false, throwOnError = false, showProgress = false } = {}) {
   if (!cloudDocRef || currentUser.provider === "guest") return;
 
   const now = Date.now();
@@ -772,7 +809,9 @@ async function refreshCloudFromServer({ force = false, throwOnError = false } = 
     const readCloudDoc = services?.getDocFromServer || services?.getDoc;
     if (!services || !firebaseUser || !cloudDocRef || !readCloudDoc) return;
 
-    setCloudStatus("בודק עדכונים בענן...", partnerSyncLabel(cloudMemberEmails.length ? cloudMemberEmails : getCloudMemberEmails()));
+    if (showProgress) {
+      setCloudStatus("בודק עדכונים בענן...", partnerSyncLabel(cloudMemberEmails.length ? cloudMemberEmails : getCloudMemberEmails()));
+    }
     const snapshot = await readCloudDoc(cloudDocRef);
     handleCloudSnapshot(snapshot);
   })()
@@ -990,10 +1029,10 @@ async function manualSyncNow() {
     await connectCloudSync();
     if (!cloudDocRef) throw new Error("חיבור הענן עדיין לא מוכן");
 
-    await refreshCloudFromServer({ force: true, throwOnError: true });
+    await refreshCloudFromServer({ force: true, throwOnError: true, showProgress: true });
     markCloudDirty();
     await waitForCloudWrites();
-    await refreshCloudFromServer({ force: true, throwOnError: true });
+    await refreshCloudFromServer({ force: true, throwOnError: true, showProgress: true });
 
     setCloudStatus("מסונכרן עכשיו", partnerSyncLabel(cloudMemberEmails));
     showToast("היומן מסונכרן ומעודכן");
@@ -1076,6 +1115,7 @@ function getCloudMemberEmails() {
 
 async function findExistingFamilyForCurrentUser(services) {
   const email = normalizeEmail(currentUser.email);
+  const firebaseUid = services.auth.currentUser?.uid || currentUser.firebaseUid || "";
   if (!email) return null;
 
   try {
@@ -1087,13 +1127,23 @@ async function findExistingFamilyForCurrentUser(services) {
     snapshot.forEach((docSnapshot) => {
       const data = docSnapshot.data() || {};
       const memberEmails = normalizeEmailList(data.memberEmails || []);
+      const memberUids = Array.isArray(data.memberUids) ? data.memberUids.filter(Boolean) : [];
       if (memberEmails.length < 2) return;
 
       const candidate = {
         id: docSnapshot.id,
         memberEmails,
+        memberUids,
         invitedByEmail: data.updatedByEmail || "",
         updatedAt: new Date(data.updatedAt || 0).getTime(),
+        isExistingMember: Boolean(
+          firebaseUid
+          && (
+            memberUids.includes(firebaseUid)
+            || data.updatedByUid === firebaseUid
+            || data.memberStates?.[firebaseUid]
+          )
+        ),
       };
 
       if (state.sync.declinedFamilyIds.includes(candidate.id)) return;
@@ -1279,7 +1329,8 @@ function renderAuth() {
   els.userStatus.textContent = isGuest ? "לא מחובר לגוגל" : `מחובר כ-${currentUser.email || currentUser.name}`;
   els.googleSignInButton.hidden = !isGuest;
   els.signOutButton.hidden = isGuest;
-  els.syncStatus.textContent = isGuest ? "נשמר במכשיר" : cloudStatusText || `נשמר עבור ${currentUser.name}`;
+  const nextSyncStatus = isGuest ? "נשמר במכשיר" : cloudStatusText || `נשמר עבור ${currentUser.name}`;
+  if (els.syncStatus.textContent !== nextSyncStatus) els.syncStatus.textContent = nextSyncStatus;
   renderManualSyncButton();
 }
 
@@ -1865,8 +1916,8 @@ function renderFeeding(active, latest, latestStarted) {
   if (active) {
     const elapsed = Date.now() - new Date(active.startedAt).getTime();
     const dessertSide = oppositeSide(active.side);
-    els.activeTimer.textContent = formatDuration(elapsed);
-    els.partnerElapsed.textContent = formatDuration(elapsed);
+    setDurationText(els.activeTimer, formatDuration(elapsed));
+    setDurationText(els.partnerElapsed, formatDuration(elapsed));
     if (isBottleFeeding(active)) {
       els.timerHint.textContent = `בקבוק התחיל ב-${formatTime(active.startedAt)}`;
       els.pauseButton.textContent = active.pauses.some((pause) => !pause.endedAt) ? "חזרה לבקבוק" : "עצירה";
@@ -1881,8 +1932,8 @@ function renderFeeding(active, latest, latestStarted) {
       els.dessertButton.hidden = Boolean(active.dessertSide);
     }
   } else {
-    els.activeTimer.textContent = latestStarted ? timeSince(latestStarted) : "00:00";
-    els.partnerElapsed.textContent = latestStarted ? timeSince(latestStarted) : "--";
+    setDurationText(els.activeTimer, latestStarted ? timeSince(latestStarted) : "00:00");
+    setDurationText(els.partnerElapsed, latestStarted ? timeSince(latestStarted) : "--");
     els.timerHint.textContent = latestStarted ? `עברו ${timeSince(latestStarted)} מסיום ההאכלה האחרונה` : "מוכנה להתחיל";
     els.pauseButton.textContent = "גרעפס / עצירה";
     els.stopButton.textContent = "סיום הנקה";
@@ -2881,6 +2932,15 @@ function formatDuration(ms) {
   const seconds = totalSeconds % 60;
   const parts = hours > 0 ? [hours, minutes, seconds] : [minutes, seconds];
   return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+function setDurationText(element, value) {
+  if (!element) return;
+
+  const text = String(value);
+  element.textContent = text;
+  element.classList.toggle("is-long-duration", text.length >= 9);
+  element.classList.toggle("is-extra-long-duration", text.length >= 11);
 }
 
 function formatHumanDuration(ms) {
