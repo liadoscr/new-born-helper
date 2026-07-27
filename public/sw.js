@@ -1,4 +1,4 @@
-const CACHE_NAME = "newborn-helper-v44";
+const CACHE_NAME = "newborn-helper-v45";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -18,20 +18,31 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))),
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim()),
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  if (new URL(event.request.url).pathname.endsWith("/config.js")) {
-    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
-    return;
-  }
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin) return;
+
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).catch(() => caches.match("./index.html"));
-    }),
+    fetch(event.request, { cache: "no-store" })
+      .then(async (response) => {
+        if (response.ok) {
+          const responseCopy = response.clone();
+          const cache = await caches.open(CACHE_NAME);
+          await cache.put(event.request, responseCopy);
+        }
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        if (event.request.mode === "navigate") return caches.match("./index.html");
+        return Response.error();
+      }),
   );
 });

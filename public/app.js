@@ -9,11 +9,14 @@ const LEGACY_STORAGE_KEY = "night-feeding-state-v1";
 const AUTH_STORAGE_KEY = "lullaby-log-auth-user-v1";
 const NOTIFICATION_STORAGE_PREFIX = "newborn-helper-notifications-v1";
 const CLOUD_DIRTY_STORAGE_PREFIX = "newborn-helper-cloud-dirty-v1";
+const FAST_SYNC_OUTBOX_PREFIX = "newborn-helper-fast-sync-outbox-v1";
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_FAMILY_COLLECTION = "families";
 const CLOUD_WRITE_DEBOUNCE_MS = 900;
 const CLOUD_REFRESH_THROTTLE_MS = 10 * 1000;
 const CLOUD_VISIBLE_REFRESH_MS = 30 * 1000;
+const FAST_SYNC_MAX_BATCH_BYTES = 48 * 1024;
+const FAST_SYNC_MAX_BATCH_ITEMS = 20;
 
 const MILK_STORAGE_RULES = {
   room: {
@@ -92,8 +95,16 @@ const defaultState = {
   },
 };
 
+const SYNC_COLLECTIONS = [
+  { stateKey: "feedings", type: "feeding" },
+  { stateKey: "diapers", type: "diaper" },
+  { stateKey: "bottles", type: "bottle" },
+  { stateKey: "pumps", type: "pump" },
+];
+
 let currentUser = loadAuthUser();
 let state = loadState(currentUser);
+let fastSyncBaselineState = clone(state);
 let undo = null;
 let undoTimer = null;
 let nextFeedingNotificationTimer = null;
@@ -116,6 +127,10 @@ let cloudLastRefreshAt = 0;
 let cloudRefreshPromise = null;
 let cloudConnectPromise = null;
 let manualSyncInProgress = false;
+let fastSyncFlushPromise = null;
+let cachedFirebaseIdToken = "";
+let cachedFirebaseUid = "";
+let firebaseTokenRefreshTimer = null;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -296,17 +311,27 @@ function init() {
   window.addEventListener("focus", refreshCloudOnResume);
   window.addEventListener("online", refreshCloudOnResume);
   window.addEventListener("pageshow", refreshCloudOnResume);
-  window.addEventListener("pagehide", flushCloudWriteBeforeSleep);
-  window.addEventListener("beforeunload", flushCloudWriteBeforeSleep);
+  window.addEventListener("pagehide", flushCloudWritesBeforeSleep);
+  window.addEventListener("beforeunload", flushCloudWritesBeforeSleep);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) flushCloudWriteBeforeSleep();
+    if (document.hidden) flushCloudWritesBeforeSleep();
     else refreshCloudOnResume();
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {
-      els.syncStatus.textContent = "נשמר מקומית";
+    const hadServiceWorkerController = Boolean(navigator.serviceWorker.controller);
+    let reloadingForServiceWorker = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadServiceWorkerController || reloadingForServiceWorker) return;
+      reloadingForServiceWorker = true;
+      window.location.reload();
     });
+    navigator.serviceWorker
+      .register("sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => {
+        els.syncStatus.textContent = "נשמר מקומית";
+      });
   }
 
   renderAuth();
@@ -333,6 +358,10 @@ function cloudDirtyKeyFor(user) {
   return `${CLOUD_DIRTY_STORAGE_PREFIX}:user:${user.id}`;
 }
 
+function fastSyncOutboxKeyFor(user) {
+  return `${FAST_SYNC_OUTBOX_PREFIX}:user:${user.id}`;
+}
+
 function loadCloudDirty(user) {
   if (!user || user.provider === "guest") return false;
   return localStorage.getItem(cloudDirtyKeyFor(user)) === "1";
@@ -348,6 +377,95 @@ function clearCloudDirty(user = currentUser) {
   if (!user || user.provider === "guest") return;
   cloudLocalDirty = false;
   localStorage.removeItem(cloudDirtyKeyFor(user));
+}
+
+function loadFastSyncOutbox(user = currentUser) {
+  if (!user || user.provider === "guest") return {};
+
+  try {
+    const parsed = JSON.parse(localStorage.getItem(fastSyncOutboxKeyFor(user)) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFastSyncOutbox(outbox, user = currentUser) {
+  if (!user || user.provider === "guest") return;
+
+  const key = fastSyncOutboxKeyFor(user);
+  if (Object.keys(outbox).length) localStorage.setItem(key, JSON.stringify(outbox));
+  else localStorage.removeItem(key);
+}
+
+function fastSyncOperationFieldKey(type, id, revision) {
+  const bytes = new TextEncoder().encode(deletedKey(type, id));
+  const eventKey = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const revisionKey = String(revision || "").replace(/[^a-z0-9_]/gi, "");
+  return `e_${eventKey}_${revisionKey}`;
+}
+
+function createFastSyncRevision() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function stageFastSyncChanges(previousState, nextState) {
+  if (currentUser.provider === "guest") return;
+
+  const previous = normalizeState(previousState);
+  const next = normalizeState(nextState);
+  const outbox = loadFastSyncOutbox();
+  let changed = false;
+
+  SYNC_COLLECTIONS.forEach(({ stateKey, type }) => {
+    const previousById = new Map(previous[stateKey].filter((item) => item?.id).map((item) => [item.id, item]));
+    next[stateKey].forEach((item) => {
+      if (!item?.id) return;
+      const previousItem = previousById.get(item.id);
+      if (previousItem && JSON.stringify(previousItem) === JSON.stringify(item)) return;
+
+      const revision = createFastSyncRevision();
+      const fieldKey = fastSyncOperationFieldKey(type, item.id, revision);
+      outbox[`record:${fieldKey}`] = {
+        revision,
+        fieldKey,
+        kind: "record",
+        type,
+        id: item.id,
+        item: clone(item),
+        queuedAt: new Date().toISOString(),
+      };
+      changed = true;
+    });
+  });
+
+  const previousDeletes = new Map(
+    previous.deletedEvents
+      .filter((item) => item?.type && item?.id)
+      .map((item) => [deletedKey(item.type, item.id), item]),
+  );
+  next.deletedEvents.forEach((tombstone) => {
+    if (!tombstone?.type || !tombstone?.id) return;
+    const key = deletedKey(tombstone.type, tombstone.id);
+    const previousTombstone = previousDeletes.get(key);
+    if (previousTombstone && JSON.stringify(previousTombstone) === JSON.stringify(tombstone)) return;
+
+    const revision = createFastSyncRevision();
+    const fieldKey = fastSyncOperationFieldKey(tombstone.type, tombstone.id, revision);
+    outbox[`delete:${fieldKey}`] = {
+      revision,
+      fieldKey,
+      kind: "delete",
+      type: tombstone.type,
+      id: tombstone.id,
+      tombstone: clone(tombstone),
+      queuedAt: new Date().toISOString(),
+    };
+    changed = true;
+  });
+
+  if (changed) saveFastSyncOutbox(outbox);
 }
 
 function loadAuthUser() {
@@ -398,9 +516,12 @@ function normalizeState(value) {
 }
 
 function saveState() {
+  if (!cloudApplyingRemote) stageFastSyncChanges(fastSyncBaselineState, state);
+  fastSyncBaselineState = clone(state);
   localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
   if (!cloudApplyingRemote) {
     markCloudDirty();
+    flushFastSyncOutbox({ keepalive: true }).catch(() => {});
     scheduleCloudWrite(0);
     if (!cloudDocRef && currentUser.provider !== "guest") {
       connectCloudSync().catch(() => {});
@@ -415,6 +536,7 @@ function switchUser(user) {
   currentUser = user;
   saveAuthUser(user);
   state = loadState(user);
+  fastSyncBaselineState = clone(state);
   cloudLocalDirty = loadCloudDirty(user);
   clearUndo();
   clearNextFeedingNotification();
@@ -523,6 +645,7 @@ async function loadFirebaseServices() {
           localCache: firestoreModule.persistentLocalCache({
             tabManager: firestoreModule.persistentMultipleTabManager(),
           }),
+          experimentalAutoDetectLongPolling: true,
         });
       } catch {
         db = firestoreModule.getFirestore(app);
@@ -588,6 +711,7 @@ async function initCloudAuth() {
 
   firebaseAuthUnsubscribe = services.onAuthStateChanged(services.auth, (firebaseUser) => {
     if (!firebaseUser) {
+      clearCachedFirebaseToken();
       stopCloudSync();
       if (currentUser.provider !== "guest") {
         switchUser(GUEST_USER);
@@ -606,6 +730,7 @@ function applyFirebaseUser(firebaseUser) {
 
   if (!isSameUser) {
     switchUser(user);
+    refreshCachedFirebaseToken(firebaseUser).catch(() => {});
     return user;
   }
 
@@ -620,6 +745,7 @@ function applyFirebaseUser(firebaseUser) {
   renderAuth();
   renderSyncSettings();
   connectCloudSync();
+  refreshCachedFirebaseToken(firebaseUser).catch(() => {});
   return currentUser;
 }
 
@@ -632,6 +758,33 @@ function userFromFirebase(firebaseUser) {
     picture: firebaseUser.photoURL || "",
     provider: "google",
   };
+}
+
+function clearCachedFirebaseToken() {
+  clearTimeout(firebaseTokenRefreshTimer);
+  firebaseTokenRefreshTimer = null;
+  cachedFirebaseIdToken = "";
+  cachedFirebaseUid = "";
+}
+
+async function refreshCachedFirebaseToken(firebaseUser, forceRefresh = false) {
+  if (!firebaseUser) {
+    clearCachedFirebaseToken();
+    return "";
+  }
+
+  const token = await firebaseUser.getIdToken(forceRefresh);
+  if (firebaseServices?.auth.currentUser?.uid !== firebaseUser.uid) return "";
+
+  clearTimeout(firebaseTokenRefreshTimer);
+  cachedFirebaseIdToken = token;
+  cachedFirebaseUid = firebaseUser.uid;
+  firebaseTokenRefreshTimer = setTimeout(() => {
+    const activeUser = firebaseServices?.auth.currentUser;
+    if (activeUser) refreshCachedFirebaseToken(activeUser, true).catch(() => {});
+  }, 50 * 60 * 1000);
+  flushFastSyncOutbox({ keepalive: true }).catch(() => {});
+  return token;
 }
 
 async function signOutFirebase() {
@@ -672,6 +825,179 @@ function stopCloudSync({ preserveLocalDirty = false } = {}) {
   cloudStatusText = "";
   cloudLastRefreshAt = 0;
   cloudRefreshPromise = null;
+}
+
+function toFirestoreRestValue(value) {
+  if (value === null || value === undefined) return { nullValue: null };
+  if (typeof value === "string") return { stringValue: value };
+  if (typeof value === "boolean") return { booleanValue: value };
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return { nullValue: null };
+    return Number.isInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  }
+  if (Array.isArray(value)) {
+    return { arrayValue: { values: value.map((item) => toFirestoreRestValue(item)) } };
+  }
+  if (typeof value === "object") {
+    const fields = {};
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      if (nestedValue !== undefined) fields[key] = toFirestoreRestValue(nestedValue);
+    });
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(value) };
+}
+
+function buildFastSyncRequest(entries, syncContext) {
+  const fastRecords = {};
+  const fastDeletes = {};
+  const fieldPaths = [];
+
+  entries.forEach((entry) => {
+    const payload = {
+      type: entry.type,
+      id: entry.id,
+      queuedAt: entry.queuedAt,
+      updatedByUid: syncContext.uid,
+      updatedByEmail: syncContext.email,
+    };
+
+    if (entry.kind === "delete") {
+      payload.tombstone = entry.tombstone;
+      fastDeletes[entry.fieldKey] = toFirestoreRestValue(payload);
+      fieldPaths.push(`fastDeletes.${entry.fieldKey}`);
+    } else {
+      payload.item = entry.item;
+      fastRecords[entry.fieldKey] = toFirestoreRestValue(payload);
+      fieldPaths.push(`fastRecords.${entry.fieldKey}`);
+    }
+  });
+
+  const now = new Date().toISOString();
+  const fields = {
+    fastUpdatedAt: toFirestoreRestValue(now),
+    updatedByUid: toFirestoreRestValue(syncContext.uid),
+    updatedByEmail: toFirestoreRestValue(syncContext.email),
+  };
+  if (Object.keys(fastRecords).length) fields.fastRecords = { mapValue: { fields: fastRecords } };
+  if (Object.keys(fastDeletes).length) fields.fastDeletes = { mapValue: { fields: fastDeletes } };
+
+  fieldPaths.push("fastUpdatedAt", "updatedByUid", "updatedByEmail");
+  const query = new URLSearchParams();
+  fieldPaths.forEach((path) => query.append("updateMask.fieldPaths", path));
+  query.set("currentDocument.exists", "true");
+
+  const encodedDocumentPath = syncContext.documentPath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(syncContext.projectId)}/databases/(default)/documents/${encodedDocumentPath}?${query}`;
+  return { url, body: JSON.stringify({ fields }) };
+}
+
+function selectFastSyncBatch(entries, syncContext) {
+  const selected = [];
+
+  for (const entry of entries) {
+    if (selected.length >= FAST_SYNC_MAX_BATCH_ITEMS) break;
+    const candidate = [...selected, entry];
+    const request = buildFastSyncRequest(candidate, syncContext);
+    const requestBytes = new TextEncoder().encode(request.body).length;
+    if (requestBytes > FAST_SYNC_MAX_BATCH_BYTES && selected.length) break;
+    selected.push(entry);
+  }
+
+  return selected;
+}
+
+function createFastSyncContext() {
+  const firebaseUser = firebaseServices?.auth.currentUser;
+  const firebaseConfig = getFirebaseConfig();
+  if (
+    currentUser.provider === "guest"
+    || !cloudDocRef
+    || !firebaseUser
+    || !firebaseConfig?.projectId
+    || !cachedFirebaseIdToken
+    || cachedFirebaseUid !== firebaseUser.uid
+  ) {
+    return null;
+  }
+
+  return {
+    user: { ...currentUser },
+    uid: firebaseUser.uid,
+    email: currentUser.email || "",
+    token: cachedFirebaseIdToken,
+    projectId: firebaseConfig.projectId,
+    documentPath: cloudDocRef.path,
+  };
+}
+
+async function flushFastSyncOutbox({ keepalive = false } = {}) {
+  const syncContext = createFastSyncContext();
+  if (!syncContext || navigator.onLine === false) return false;
+  if (!Object.keys(loadFastSyncOutbox(syncContext.user)).length) return true;
+
+  const flushPromise = flushFastSyncOutboxInternal(syncContext, keepalive);
+  fastSyncFlushPromise = flushPromise;
+  try {
+    return await flushPromise;
+  } finally {
+    if (fastSyncFlushPromise === flushPromise) fastSyncFlushPromise = null;
+  }
+}
+
+function sendFastSyncRequest(request, token, keepalive) {
+  return fetch(request.url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: request.body,
+    keepalive,
+  });
+}
+
+async function flushFastSyncOutboxInternal(syncContext, keepalive) {
+  let sentAny = false;
+
+  while (navigator.onLine !== false) {
+    const outbox = loadFastSyncOutbox(syncContext.user);
+    const entries = Object.values(outbox);
+    if (!entries.length) return sentAny;
+
+    const batch = selectFastSyncBatch(entries, syncContext);
+    if (!batch.length) return sentAny;
+    const request = buildFastSyncRequest(batch, syncContext);
+    let response = await sendFastSyncRequest(request, syncContext.token, keepalive);
+
+    if (response.status === 401 && !document.hidden) {
+      const activeUser = firebaseServices?.auth.currentUser;
+      const refreshedToken = activeUser ? await refreshCachedFirebaseToken(activeUser, true) : "";
+      if (refreshedToken) {
+        syncContext.token = refreshedToken;
+        response = await sendFastSyncRequest(request, syncContext.token, keepalive);
+      }
+    }
+    if (!response.ok) {
+      const message = await response.text().catch(() => "");
+      throw new Error(`Fast sync failed (${response.status})${message ? `: ${message.slice(0, 160)}` : ""}`);
+    }
+
+    const latestOutbox = loadFastSyncOutbox(syncContext.user);
+    batch.forEach((entry) => {
+      const key = `${entry.kind}:${entry.fieldKey}`;
+      if (latestOutbox[key]?.revision === entry.revision) delete latestOutbox[key];
+    });
+    saveFastSyncOutbox(latestOutbox, syncContext.user);
+    sentAny = true;
+
+    if (document.hidden) return true;
+  }
+
+  return sentAny;
 }
 
 function connectCloudSync() {
@@ -741,6 +1067,8 @@ async function connectCloudSyncInternal(connectingUserId) {
 
   if (cloudDocRef && cloudDocRef.path === nextDocRef.path && cloudUnsubscribe) {
     cloudMemberEmails = memberEmails;
+    await refreshCachedFirebaseToken(services.auth.currentUser);
+    await flushFastSyncOutbox({ keepalive: true }).catch(() => false);
     await refreshCloudFromServer({ force: true });
     if (loadCloudDirty(currentUser)) scheduleCloudWrite(0);
     return;
@@ -756,6 +1084,9 @@ async function connectCloudSyncInternal(connectingUserId) {
   try {
     await ensureCloudDocReady();
     if (connectionIsStale()) return;
+    await refreshCachedFirebaseToken(services.auth.currentUser);
+    if (connectionIsStale()) return;
+    await flushFastSyncOutbox({ keepalive: true }).catch(() => false);
   } catch (error) {
     stopCloudSync({ preserveLocalDirty: loadCloudDirty(currentUser) });
     setCloudStatus("נשמר מקומית", `לא הצלחתי ליצור מסמך סנכרון: ${error.message}`);
@@ -782,6 +1113,7 @@ async function refreshCloudOnResume() {
 
   try {
     await connectCloudSync();
+    await flushFastSyncOutbox({ keepalive: true }).catch(() => false);
     await refreshCloudFromServer();
   } catch (error) {
     setCloudStatus("נשמר מקומית", `לא הצלחתי לרענן סנכרון ענן: ${error.message}`);
@@ -841,7 +1173,7 @@ async function ensureCloudDocReady() {
     cloudDocRef,
     {
       app: "newborn-helper",
-      schemaVersion: 4,
+      schemaVersion: 5,
       memberEmails,
       memberUids: services.arrayUnion(firebaseUser.uid),
       updatedAt: new Date().toISOString(),
@@ -917,11 +1249,13 @@ async function waitForCloudWrites() {
   }
 }
 
-function flushCloudWriteBeforeSleep() {
-  if (!loadCloudDirty(currentUser) && !cloudWriteTimer) return;
-  clearTimeout(cloudWriteTimer);
-  cloudWriteTimer = null;
-  queueCloudWrite();
+function flushCloudWritesBeforeSleep() {
+  flushFastSyncOutbox({ keepalive: true }).catch(() => {});
+  if (loadCloudDirty(currentUser) || cloudWriteTimer) {
+    clearTimeout(cloudWriteTimer);
+    cloudWriteTimer = null;
+    queueCloudWrite();
+  }
 }
 
 async function writeCloudState() {
@@ -940,7 +1274,7 @@ async function writeCloudState() {
     cloudDocRef,
     {
       app: "newborn-helper",
-      schemaVersion: 4,
+      schemaVersion: 5,
       memberEmails,
       memberUids: services.arrayUnion(firebaseUser.uid),
       memberStates: {
@@ -972,10 +1306,12 @@ async function writeCloudState() {
       cloudDocRef,
       {
         app: "newborn-helper",
-        schemaVersion: 4,
+        schemaVersion: 5,
         memberEmails: mergedMemberEmails,
         memberUids: services.arrayUnion(firebaseUser.uid),
         memberStates: services.deleteField(),
+        fastRecords: services.deleteField(),
+        fastDeletes: services.deleteField(),
         state: sanitizeStateForCloud(mergedState),
         updatedAt: new Date().toISOString(),
         updatedByEmail: currentUser.email || "",
@@ -997,6 +1333,7 @@ async function writeCloudState() {
     cloudApplyingRemote = true;
     state = latestLocalState;
     localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+    fastSyncBaselineState = clone(state);
     cloudApplyingRemote = false;
     render();
   }
@@ -1029,6 +1366,7 @@ async function manualSyncNow() {
     await connectCloudSync();
     if (!cloudDocRef) throw new Error("חיבור הענן עדיין לא מוכן");
 
+    await flushFastSyncOutbox().catch(() => false);
     await refreshCloudFromServer({ force: true, throwOnError: true, showProgress: true });
     markCloudDirty();
     await waitForCloudWrites();
@@ -1075,6 +1413,10 @@ function handleCloudSnapshot(snapshot) {
     && typeof data.memberStates === "object"
     && Object.keys(data.memberStates).length,
   );
+  const hasFastSyncOperations = Boolean(
+    (data.fastRecords && typeof data.fastRecords === "object" && Object.keys(data.fastRecords).length)
+    || (data.fastDeletes && typeof data.fastDeletes === "object" && Object.keys(data.fastDeletes).length),
+  );
   const memberEmails = normalizeEmailList(data.memberEmails || cloudMemberEmails);
   if (memberEmails.length) {
     cloudMemberEmails = memberEmails;
@@ -1089,6 +1431,7 @@ function handleCloudSnapshot(snapshot) {
     cloudApplyingRemote = true;
     state = merged;
     localStorage.setItem(storageKeyFor(currentUser), JSON.stringify(state));
+    fastSyncBaselineState = clone(state);
     cloudApplyingRemote = false;
     renderAuth();
     renderNotificationState();
@@ -1096,7 +1439,7 @@ function handleCloudSnapshot(snapshot) {
     render();
   }
 
-  const shouldCompactFallback = hasFallbackMemberStates && !cloudWritePromise;
+  const shouldCompactFallback = (hasFallbackMemberStates || hasFastSyncOperations) && !cloudWritePromise;
   if ((remoteChanged || shouldCompactFallback) && !snapshot.metadata.hasPendingWrites) {
     markCloudDirty();
     scheduleCloudWrite(0);
@@ -1196,6 +1539,29 @@ function mergeCloudDocumentState(data) {
     if (!memberState?.state) return;
     mergedState = mergeStates(mergedState, normalizeState(memberState.state));
   });
+
+  const operationState = clone(defaultState);
+  const fastRecords = data?.fastRecords && typeof data.fastRecords === "object"
+    ? Object.values(data.fastRecords)
+    : [];
+  const fastDeletes = data?.fastDeletes && typeof data.fastDeletes === "object"
+    ? Object.values(data.fastDeletes)
+    : [];
+
+  fastRecords.forEach((operation) => {
+    if (!operation?.item?.id) return;
+    const collection = SYNC_COLLECTIONS.find(({ type }) => type === operation.type);
+    if (collection) operationState[collection.stateKey].push(operation.item);
+  });
+  fastDeletes.forEach((operation) => {
+    if (operation?.tombstone?.type && operation?.tombstone?.id) {
+      operationState.deletedEvents.push(operation.tombstone);
+    }
+  });
+
+  if (fastRecords.length || fastDeletes.length) {
+    mergedState = mergeStates(mergedState, operationState);
+  }
 
   return mergedState;
 }
