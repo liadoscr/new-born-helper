@@ -126,6 +126,8 @@ neon-cajeta-6bc33d.netlify.app
 window.LULLABY_LOG_CONFIG = {
   productionUrl: "https://neon-cajeta-6bc33d.netlify.app",
   googleClientId: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+  geminiModel: "gemini-3.6-flash",
+  appCheckSiteKey: "YOUR_RECAPTCHA_ENTERPRISE_SITE_KEY",
   firebaseConfig: {
     apiKey: "YOUR_API_KEY",
     authDomain: "YOUR_PROJECT.firebaseapp.com",
@@ -147,3 +149,26 @@ How pairing works:
 - When the second partner signs in, the app also searches Firestore for an existing family document that already includes their email.
 - If automatic discovery does not find the family document, the second partner can add the first partner's email manually.
 - Deletes are synced with tombstones so an old device should not restore deleted timeline entries.
+
+## Gemini agent
+
+The in-app assistant uses Gemini through Firebase AI Logic. It can read a privacy-filtered snapshot of the current tracker, answer questions, and use function calling to operate the app:
+
+- Start, pause, resume, or finish a feeding.
+- Log diapers, completed feedings, bottles, and pumping.
+- Edit existing records and navigate between views.
+- Update tracker goals, synchronize, and export.
+- Ask for an explicit in-app confirmation before delete, reset, notification, or family-sharing changes.
+
+Setup:
+
+1. In the Firebase console for the configured project, open **Firebase AI Logic** and complete the guided setup.
+2. Choose the **Gemini Developer API** provider.
+3. Register the web app with **Firebase App Check** using reCAPTCHA Enterprise and enable enforcement for Firebase AI Logic.
+4. Copy the public reCAPTCHA Enterprise site key into `appCheckSiteKey` in `config.js`.
+5. Keep `geminiModel` set to `gemini-3.6-flash`, or change it to another model supported by Firebase AI Logic.
+6. Run `prepare-deploy.ps1` before deployment so the `public` copy receives the same settings.
+
+No Gemini secret key belongs in this repository or in browser code. Firebase AI Logic proxies model requests and App Check protects the public client from unauthorized use.
+
+For local development, the app automatically enables App Check debug mode on `localhost` and `127.0.0.1`. Open the browser console once, copy the generated App Check debug token, and register it under **Firebase Console → App Check → Apps → Manage debug tokens**.

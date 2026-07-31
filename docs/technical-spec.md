@@ -96,3 +96,14 @@ Angular PWA
 - Conflict handling בסנכרון.
 - CSV/PDF ליועצת הנקה או רופא.
 - מעקב שאיבות, בקבוקים ומשקל.
+
+## Gemini agent
+
+The assistant is implemented with the Firebase AI Logic Web SDK and the Gemini Developer API.
+
+- Default model: `gemini-3.6-flash`.
+- Security boundary: Firebase App Check with reCAPTCHA Enterprise; no Gemini secret is shipped to the browser.
+- Context boundary: only tracker state required for the request is provided. User email addresses, partner email addresses, Firebase tokens, and deleted-event tombstones are excluded.
+- Execution boundary: Gemini proposes typed function calls, while local deterministic handlers validate and perform state changes through the existing persistence and sync path.
+- Approval boundary: deletes, full reset, partner-sharing changes, and notification-permission changes require a separate user click.
+- Medical boundary: the assistant supports tracking and app guidance; it does not diagnose, prescribe, or replace professional medical advice.

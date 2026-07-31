@@ -17,6 +17,37 @@ const CLOUD_REFRESH_THROTTLE_MS = 10 * 1000;
 const CLOUD_VISIBLE_REFRESH_MS = 30 * 1000;
 const FAST_SYNC_MAX_BATCH_BYTES = 48 * 1024;
 const FAST_SYNC_MAX_BATCH_ITEMS = 20;
+const AGENT_DEFAULT_MODEL = "gemini-3.6-flash";
+const AGENT_MAX_TOOL_ROUNDS = 6;
+
+const AGENT_SYSTEM_INSTRUCTION = `
+Role: You are the in-app assistant for NewBorn Helper, a Hebrew-first newborn feeding and care tracker.
+
+Goal: Help the user understand the current tracker data and complete requested app actions accurately.
+
+App capabilities:
+- Track live breast feedings on the left or right side, pauses for burping, dessert/second-side feeding, and completed sessions.
+- Track bottle feedings linked to pumped-milk inventory.
+- Track diapers (pee, poop, or both), pumping, milk amount, storage location, and expiry warnings.
+- Show today's summary, recent timeline, next expected feeding, family sync, notifications, export, and settings.
+- Data is offline-first and may sync to the signed-in family's Firebase document.
+
+Operating rules:
+- Reply in Hebrew unless the user writes in another language or asks for another language.
+- Use the available functions for every requested app action. Never claim an action succeeded unless its function returned success.
+- Use only event IDs present in current app context or returned by a function. Never invent an ID.
+- For relative times, use current_time and timezone from the current app context.
+- If a required detail changes the action materially, ask one short question.
+- Never delete, reset, change family sharing, or enable notifications without the confirmation flow exposed by the matching request function.
+- Keep answers short, calm, and practical. Do not expose internal IDs unless the user needs one.
+- When a function returns a validation error, explain the smallest correction needed.
+- Treat the milk-storage values as the rules configured in this app, not universal medical advice.
+
+Health safety:
+- You are an operational tracking assistant, not a clinician. Do not diagnose, prescribe treatment, or provide medication dosing.
+- For medical questions, give only general information, state the limitation, and recommend an appropriate clinician.
+- If the message suggests breathing difficulty, blue/gray color, unresponsiveness, seizure, severe dehydration, uncontrolled bleeding, or another possible emergency, tell the user to seek urgent local medical help immediately.
+`;
 
 const MILK_STORAGE_RULES = {
   room: {
@@ -131,6 +162,12 @@ let fastSyncFlushPromise = null;
 let cachedFirebaseIdToken = "";
 let cachedFirebaseUid = "";
 let firebaseTokenRefreshTimer = null;
+let agentModel = null;
+let agentChat = null;
+let agentLoadPromise = null;
+let agentSending = false;
+let pendingAgentAction = null;
+let appCheckInitialized = false;
 
 const els = {
   activeControls: document.querySelector("#activeControls"),
@@ -141,8 +178,22 @@ const els = {
   activeTimer: document.querySelector("#activeTimer"),
   acceptFamilyInviteButton: document.querySelector("#acceptFamilyInviteButton"),
   addManualButton: document.querySelector("#addManualButton"),
+  agentButton: document.querySelector("#agentButton"),
+  agentConnection: document.querySelector("#agentConnection"),
+  agentConnectionText: document.querySelector("#agentConnectionText"),
+  agentDialog: document.querySelector("#agentDialog"),
+  agentForm: document.querySelector("#agentForm"),
+  agentInput: document.querySelector("#agentInput"),
+  agentMessages: document.querySelector("#agentMessages"),
+  agentPendingAction: document.querySelector("#agentPendingAction"),
+  agentPendingText: document.querySelector("#agentPendingText"),
+  agentPendingTitle: document.querySelector("#agentPendingTitle"),
+  agentPromptButtons: document.querySelectorAll("[data-agent-prompt]"),
+  agentSendButton: document.querySelector("#agentSendButton"),
   bottleButton: document.querySelector("#bottleButton"),
   bottleSideStat: document.querySelector("#bottleSideStat"),
+  cancelAgentActionButton: document.querySelector("#cancelAgentActionButton"),
+  closeAgentButton: document.querySelector("#closeAgentButton"),
   closeMenuButton: document.querySelector("#closeMenuButton"),
   configHint: document.querySelector("#googleConfigHint"),
   entryAmountUnitInput: document.querySelector("#entryAmountUnitInput"),
@@ -182,6 +233,7 @@ const els = {
   familyInviteText: document.querySelector("#familyInviteText"),
   googleSignInButton: document.querySelector("#googleSignInButton"),
   historyList: document.querySelector("#historyList"),
+  confirmAgentActionButton: document.querySelector("#confirmAgentActionButton"),
   manualSyncButton: document.querySelector("#manualSyncButton"),
   lastDiaperText: document.querySelector("#lastDiaperText"),
   lastFeedText: document.querySelector("#lastFeedText"),
@@ -246,6 +298,22 @@ const els = {
 init();
 
 function init() {
+  els.agentButton.addEventListener("click", openAgent);
+  els.closeAgentButton.addEventListener("click", closeAgent);
+  els.agentForm.addEventListener("submit", handleAgentSubmit);
+  els.agentInput.addEventListener("input", resizeAgentInput);
+  els.agentInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      els.agentForm.requestSubmit();
+    }
+  });
+  els.agentPromptButtons.forEach((button) => {
+    button.addEventListener("click", () => sendAgentMessage(button.dataset.agentPrompt));
+  });
+  els.confirmAgentActionButton.addEventListener("click", () => resolvePendingAgentAction(true));
+  els.cancelAgentActionButton.addEventListener("click", () => resolvePendingAgentAction(false));
+
   els.sideButtons.forEach((button) => {
     button.addEventListener("click", () => handleSideTap(button.dataset.side));
   });
@@ -264,6 +332,13 @@ function init() {
   els.menuBackdrop.addEventListener("click", closeMenu);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMenu();
+  });
+  els.agentDialog.addEventListener("cancel", (event) => {
+    if (agentSending) {
+      event.preventDefault();
+      return;
+    }
+    closeAgent();
   });
 
   els.pauseButton.addEventListener("click", togglePause);
@@ -532,6 +607,7 @@ function saveState() {
 function switchUser(user) {
   saveState();
   stopCloudSync();
+  resetAgentConversation();
   pendingFamilyInvitation = null;
   currentUser = user;
   saveAuthUser(user);
@@ -652,6 +728,7 @@ async function loadFirebaseServices() {
       }
 
       firebaseServices = {
+        app,
         auth,
         db,
         GoogleAuthProvider: authModule.GoogleAuthProvider,
@@ -1839,6 +1916,1036 @@ async function requestNotificationPermission() {
   return permission === "granted";
 }
 
+function openAgent() {
+  closeMenu();
+  if (!els.agentDialog.open) els.agentDialog.showModal();
+  requestAnimationFrame(() => els.agentInput.focus({ preventScroll: true }));
+  setAgentConnection("busy", "מתחבר ל-Gemini…");
+  loadGeminiAgent()
+    .then(() => setAgentConnection("ready", "Gemini מוכן · הפעולות מאומתות באפליקציה"))
+    .catch((error) => setAgentConnection("error", agentErrorMessage(error)));
+}
+
+function closeAgent() {
+  if (els.agentDialog.open) els.agentDialog.close();
+}
+
+function handleAgentSubmit(event) {
+  event.preventDefault();
+  const message = els.agentInput.value.trim();
+  if (!message) return;
+  els.agentInput.value = "";
+  resizeAgentInput();
+  sendAgentMessage(message);
+}
+
+function resizeAgentInput() {
+  els.agentInput.style.height = "auto";
+  els.agentInput.style.height = `${Math.min(els.agentInput.scrollHeight, 120)}px`;
+}
+
+function setAgentConnection(status, text) {
+  els.agentConnection.classList.toggle("is-busy", status === "busy");
+  els.agentConnection.classList.toggle("has-error", status === "error");
+  els.agentConnectionText.textContent = text;
+}
+
+function appendAgentMessage(role, text) {
+  const article = document.createElement("article");
+  article.className = `agent-message is-${role}`;
+
+  if (role !== "user") {
+    const avatar = document.createElement("span");
+    avatar.className = "agent-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.textContent = role === "action" ? "✓" : "✦";
+    article.appendChild(avatar);
+  }
+
+  const body = document.createElement("div");
+  const paragraph = document.createElement("p");
+  paragraph.textContent = text;
+  body.appendChild(paragraph);
+  article.appendChild(body);
+  els.agentMessages.appendChild(article);
+  els.agentMessages.scrollTop = els.agentMessages.scrollHeight;
+}
+
+function resetAgentConversation() {
+  agentChat = null;
+  pendingAgentAction = null;
+  if (els.agentPendingAction) els.agentPendingAction.hidden = true;
+  if (els.agentMessages) {
+    els.agentMessages.replaceChildren();
+    appendAgentMessage("assistant", "התחלנו שיחה חדשה. איך אפשר לעזור עם המעקב?");
+  }
+}
+
+async function loadGeminiAgent() {
+  if (agentModel) return agentModel;
+  if (agentLoadPromise) return agentLoadPromise;
+
+  agentLoadPromise = (async () => {
+    const services = await loadFirebaseServices();
+    if (!services?.app) throw new Error("Firebase אינו מוגדר באפליקציה");
+
+    await initializeAgentAppCheck(services.app);
+    const aiModule = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-ai.js`);
+    const ai = aiModule.getAI(services.app, { backend: new aiModule.GoogleAIBackend() });
+    const configuredModel = String(window.LULLABY_LOG_CONFIG?.geminiModel || AGENT_DEFAULT_MODEL).trim();
+
+    agentModel = aiModule.getGenerativeModel(ai, {
+      model: configuredModel || AGENT_DEFAULT_MODEL,
+      systemInstruction: AGENT_SYSTEM_INSTRUCTION,
+      tools: buildAgentTools(aiModule.Schema),
+    });
+    agentChat = agentModel.startChat();
+    return agentModel;
+  })().catch((error) => {
+    agentLoadPromise = null;
+    throw error;
+  });
+
+  return agentLoadPromise;
+}
+
+async function initializeAgentAppCheck(firebaseApp) {
+  if (appCheckInitialized) return true;
+  const siteKey = String(window.LULLABY_LOG_CONFIG?.appCheckSiteKey || "").trim();
+  if (!siteKey) throw new Error("APP_CHECK_SETUP_REQUIRED");
+
+  if (["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+  }
+
+  const appCheckModule = await import(
+    `https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app-check.js`
+  );
+  try {
+    appCheckModule.initializeAppCheck(firebaseApp, {
+      provider: new appCheckModule.ReCaptchaEnterpriseProvider(siteKey),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } catch (error) {
+    if (!String(error?.code || error?.message || "").includes("already-initialized")) throw error;
+  }
+  appCheckInitialized = true;
+  return true;
+}
+
+function buildAgentTools(Schema) {
+  const objectSchema = (properties) => Schema.object({ properties });
+  const stringSchema = (description, values = []) =>
+    values.length ? Schema.enumString({ description, enum: values }) : Schema.string({ description });
+
+  return [
+    {
+      functionDeclarations: [
+        {
+          name: "get_current_status",
+          description: "Read the latest app status and tracker records before answering or choosing an event ID.",
+          parameters: objectSchema({}),
+        },
+        {
+          name: "navigate_to_view",
+          description: "Navigate the app to a main view.",
+          parameters: objectSchema({
+            view: stringSchema("Destination view.", ["home", "logs", "sync", "settings"]),
+          }),
+        },
+        {
+          name: "start_feeding",
+          description: "Start a live breast feeding now. Fails if another feeding is active.",
+          parameters: objectSchema({
+            side: stringSchema("Breast side.", ["left", "right"]),
+          }),
+        },
+        {
+          name: "start_bottle",
+          description: "Start a live bottle feeding from one available pumping record. Use a real pump_id from current status.",
+          parameters: objectSchema({
+            pump_id: stringSchema("ID of the pumping record used for this bottle."),
+          }),
+        },
+        {
+          name: "finish_active_feeding",
+          description: "Finish the active feeding now. For breast feeding pass amount 0 and unit ml. For a bottle, provide the consumed amount.",
+          parameters: objectSchema({
+            amount: Schema.number({ description: "Bottle amount consumed, or 0 for breast feeding." }),
+            unit: stringSchema("Amount unit.", ["ml", "oz", "spoon", "other"]),
+          }),
+        },
+        {
+          name: "set_active_feeding_pause",
+          description: "Pause or resume the active feeding.",
+          parameters: objectSchema({
+            paused: Schema.boolean({ description: "True to pause; false to resume." }),
+          }),
+        },
+        {
+          name: "start_second_side",
+          description: "Start the dessert/second-side phase of the active breast feeding.",
+          parameters: objectSchema({}),
+        },
+        {
+          name: "log_diaper",
+          description: "Add a diaper record. occurred_at must be an ISO date-time or the literal now.",
+          parameters: objectSchema({
+            diaper_type: stringSchema("Diaper contents.", ["pee", "poop", "both"]),
+            occurred_at: stringSchema("ISO date-time with timezone, or now."),
+          }),
+        },
+        {
+          name: "log_completed_feeding",
+          description: "Add a completed historical breast-feeding record.",
+          parameters: objectSchema({
+            side: stringSchema("Breast side.", ["left", "right"]),
+            started_at: stringSchema("ISO start date-time with timezone."),
+            ended_at: stringSchema("ISO end date-time with timezone, or now."),
+          }),
+        },
+        {
+          name: "log_bottle",
+          description: "Add a completed standalone bottle record.",
+          parameters: objectSchema({
+            amount: Schema.number({ description: "Amount consumed, greater than zero." }),
+            unit: stringSchema("Amount unit.", ["ml", "oz", "spoon", "other"]),
+            occurred_at: stringSchema("ISO date-time with timezone, or now."),
+          }),
+        },
+        {
+          name: "log_pump",
+          description: "Add a pumping record and calculate storage guidance using the app rules.",
+          parameters: objectSchema({
+            amount: Schema.number({ description: "Amount pumped, greater than zero." }),
+            unit: stringSchema("Amount unit.", ["ml", "oz", "spoon", "other"]),
+            storage: stringSchema("Storage location.", Object.keys(MILK_STORAGE_RULES)),
+            occurred_at: stringSchema("ISO date-time with timezone, or now."),
+          }),
+        },
+        {
+          name: "update_event",
+          description: "Update a non-destructive field on an existing event. changes_json is a JSON object using app fields such as startedAt, endedAt, createdAt, side, type, amountValue, amountUnit, or storage.",
+          parameters: objectSchema({
+            event_type: stringSchema("Event collection.", ["feeding", "diaper", "bottle", "pump"]),
+            event_id: stringSchema("Existing event ID from current status."),
+            changes_json: stringSchema("JSON object containing only fields to update."),
+          }),
+        },
+        {
+          name: "request_delete_event",
+          description: "Prepare deletion of one existing event. The app will require explicit user confirmation before deletion.",
+          parameters: objectSchema({
+            event_type: stringSchema("Event collection.", ["feeding", "diaper", "bottle", "pump"]),
+            event_id: stringSchema("Existing event ID from current status."),
+          }),
+        },
+        {
+          name: "request_reset_data",
+          description: "Prepare a full reset of the current user's tracker data. The app will require explicit user confirmation.",
+          parameters: objectSchema({}),
+        },
+        {
+          name: "export_data",
+          description: "Export all tracker records as a CSV file that opens in Excel.",
+          parameters: objectSchema({}),
+        },
+        {
+          name: "sync_now",
+          description: "Run Firebase family synchronization now.",
+          parameters: objectSchema({}),
+        },
+        {
+          name: "update_tracking_settings",
+          description: "Update feeding interval, sleepy reminder, and daily diaper goals.",
+          parameters: objectSchema({
+            feeding_interval_hours: Schema.number({ description: "Expected interval, 1 to 12 hours." }),
+            sleepy_reminder_minutes: Schema.number({ description: "Reminder delay, 1 to 60 minutes." }),
+            daily_pee_goal: Schema.number({ description: "Daily pee goal, 0 to 20." }),
+            daily_poop_goal: Schema.number({ description: "Daily poop goal, 0 to 20." }),
+          }),
+        },
+        {
+          name: "request_update_partner_emails",
+          description: "Prepare a family-sharing change. emails_json must be a JSON array of email addresses. Explicit confirmation is required.",
+          parameters: objectSchema({
+            emails_json: stringSchema("JSON array of partner email addresses."),
+          }),
+        },
+        {
+          name: "request_set_notifications",
+          description: "Prepare enabling or disabling feeding notifications. Explicit confirmation is required.",
+          parameters: objectSchema({
+            enabled: Schema.boolean({ description: "Desired notification state." }),
+          }),
+        },
+      ],
+    },
+  ];
+}
+
+function buildAgentPrompt(message) {
+  return [
+    "USER_REQUEST:",
+    message,
+    "",
+    "CURRENT_APP_CONTEXT:",
+    JSON.stringify(buildAgentSnapshot()),
+  ].join("\n");
+}
+
+function buildAgentSnapshot() {
+  const now = new Date();
+  const todayKey = getTodayKey();
+  const active = getActiveFeeding();
+  const latest = getLatestFeeding();
+  const latestBase = latest ? getFeedingIntervalBaseDate(latest) : null;
+  const nextFeedAt = latestBase
+    ? new Date(latestBase.getTime() + getFeedingIntervalMs()).toISOString()
+    : "";
+  const todayDiapers = state.diapers.filter((item) => getDateKey(item.createdAt) === todayKey);
+  const todayFeedings = state.feedings.filter((item) => getDateKey(item.startedAt) === todayKey);
+  const currentView = [...els.views].find((view) => view.classList.contains("is-active"))?.dataset.view || "home";
+
+  return {
+    app: {
+      name: "NewBorn Helper",
+      features: [
+        "live breast feeding",
+        "bottle feeding from pumped milk",
+        "diapers",
+        "pumping and milk storage",
+        "timeline editing",
+        "family sync",
+        "notifications",
+        "CSV export",
+      ],
+    },
+    current_time: now.toISOString(),
+    local_time: now.toLocaleString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local",
+    current_view: currentView,
+    user_mode: currentUser.provider === "guest" ? "guest" : "signed_in",
+    sync_status: els.syncStatus.textContent,
+    notifications_enabled: notificationsEnabled(),
+    settings: clone(state.settings),
+    active_feeding: active ? agentFeedingRecord(active, now) : null,
+    next_feeding_at: nextFeedAt,
+    suggested_next_side: nextStartSide(latest),
+    today: {
+      feedings: todayFeedings.length,
+      diapers: todayDiapers.length,
+      pee: todayDiapers.filter((item) => item.type === "pee" || item.type === "both").length,
+      poop: todayDiapers.filter((item) => item.type === "poop" || item.type === "both").length,
+      pumped: state.pumps.filter((item) => getDateKey(item.createdAt) === todayKey).length,
+    },
+    recent_feedings: [...state.feedings]
+      .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
+      .slice(0, 30)
+      .map((item) => agentFeedingRecord(item, now)),
+    recent_diapers: [...state.diapers]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 30)
+      .map((item) => ({ id: item.id, type: item.type, createdAt: item.createdAt })),
+    recent_bottles: [...state.bottles]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 20)
+      .map((item) => ({
+        id: item.id,
+        createdAt: item.createdAt,
+        amountValue: amountValue(item),
+        amountUnit: amountUnit(item),
+        pumpId: item.pumpId || "",
+      })),
+    milk_inventory: [...state.pumps]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 30)
+      .map((item) => ({
+        id: item.id,
+        code: pumpCode(item),
+        createdAt: item.createdAt,
+        storage: item.storage,
+        amountValue: amountValue(item),
+        amountUnit: amountUnit(item),
+        remaining: formatPumpRemaining(item),
+        storageStatus: formatMilkStorageStatus(item),
+        warnings: evaluatePumpWarnings(item),
+      })),
+  };
+}
+
+function agentFeedingRecord(feeding, now = new Date()) {
+  return {
+    id: feeding.id,
+    side: feeding.side,
+    startedAt: feeding.startedAt,
+    endedAt: feeding.endedAt || "",
+    active: !feeding.endedAt,
+    elapsedSeconds: Math.max(
+      0,
+      Math.round((new Date(feeding.endedAt || now).getTime() - new Date(feeding.startedAt).getTime()) / 1000),
+    ),
+    paused: Boolean((feeding.pauses || []).find((pause) => !pause.endedAt)),
+    pauses: clone(feeding.pauses || []),
+    dessertSide: feeding.dessertSide || "",
+    dessertStartedAt: getDessertStartedAt(feeding) || "",
+    dessertEndedAt: feeding.dessertEndedAt || "",
+    amountValue: amountValue(feeding),
+    amountUnit: amountUnit(feeding),
+    pumpId: feeding.pumpId || "",
+    autoClosed: Boolean(feeding.autoClosed),
+  };
+}
+
+async function sendAgentMessage(message) {
+  const nextMessage = String(message || "").trim();
+  if (!nextMessage || agentSending) return;
+
+  appendAgentMessage("user", nextMessage);
+  agentSending = true;
+  els.agentSendButton.disabled = true;
+  setAgentConnection("busy", "Gemini חושב ופועל…");
+
+  try {
+    const model = await loadGeminiAgent();
+    if (!agentChat) agentChat = model.startChat();
+
+    let result = await agentChat.sendMessage(buildAgentPrompt(nextMessage));
+    for (let round = 0; round < AGENT_MAX_TOOL_ROUNDS; round += 1) {
+      const calls = result.response.functionCalls();
+      if (!calls.length) {
+        const text = result.response.text().trim();
+        appendAgentMessage("assistant", text || "הפעולה הושלמה.");
+        setAgentConnection("ready", "Gemini מוכן");
+        return;
+      }
+
+      const responses = [];
+      for (const call of calls) {
+        const response = await executeAgentTool(call.name, call.args || {});
+        if (response.uiMessage) appendAgentMessage("action", response.uiMessage);
+        responses.push({
+          functionResponse: {
+            name: call.name,
+            response: {
+              success: response.success,
+              status: response.status || (response.success ? "completed" : "failed"),
+              message: response.message,
+              data: response.data || null,
+            },
+          },
+        });
+      }
+      result = await agentChat.sendMessage(responses);
+    }
+
+    throw new Error("Gemini ביקש יותר מדי פעולות ברצף");
+  } catch (error) {
+    const messageText = agentErrorMessage(error);
+    appendAgentMessage("assistant", messageText);
+    setAgentConnection("error", messageText);
+  } finally {
+    agentSending = false;
+    els.agentSendButton.disabled = false;
+    els.agentInput.focus({ preventScroll: true });
+  }
+}
+
+async function executeAgentTool(name, args) {
+  try {
+    if (name === "get_current_status") {
+      return { success: true, message: "Current app status loaded.", data: buildAgentSnapshot() };
+    }
+
+    if (name === "navigate_to_view") {
+      const view = String(args.view || "");
+      if (!["home", "logs", "sync", "settings"].includes(view)) throw new Error("מסך לא מוכר");
+      showView(view);
+      return { success: true, message: `Navigated to ${view}.`, uiMessage: "עברתי למסך המבוקש" };
+    }
+
+    if (name === "start_feeding") {
+      if (getActiveFeeding()) throw new Error("כבר יש האכלה פעילה");
+      const side = String(args.side || "");
+      if (!["left", "right"].includes(side)) throw new Error("צריך לבחור צד ימין או שמאל");
+      startFeeding(side);
+      return {
+        success: true,
+        message: `Started ${side} breast feeding now.`,
+        data: agentFeedingRecord(getActiveFeeding()),
+        uiMessage: `התחלתי הנקה מצד ${sideLabel(side)}`,
+      };
+    }
+
+    if (name === "start_bottle") {
+      if (getActiveFeeding()) throw new Error("כבר יש האכלה פעילה");
+      const pump = findEvent("pump", String(args.pump_id || ""));
+      if (!pump || !isPumpAvailable(pump)) throw new Error("השאיבה שנבחרה אינה זמינה לבקבוק");
+      const warnings = evaluatePumpWarnings(pump);
+      if (warnings.length) throw new Error(warnings[0]);
+      pendingBottlePumpId = pump.id;
+      startFeeding("bottle", { pumpId: pump.id });
+      return {
+        success: true,
+        message: `Started bottle from pump ${pumpCode(pump)}.`,
+        data: agentFeedingRecord(getActiveFeeding()),
+        uiMessage: `התחלתי בקבוק משאיבה ${pumpCode(pump)}`,
+      };
+    }
+
+    if (name === "finish_active_feeding") {
+      return finishActiveFeedingFromAgent(args);
+    }
+
+    if (name === "set_active_feeding_pause") {
+      const active = getActiveFeeding();
+      if (!active) throw new Error("אין האכלה פעילה");
+      const isPaused = Boolean((active.pauses || []).find((pause) => !pause.endedAt));
+      const shouldPause = Boolean(args.paused);
+      if (isPaused !== shouldPause) togglePause();
+      return {
+        success: true,
+        message: shouldPause ? "Active feeding paused." : "Active feeding resumed.",
+        uiMessage: shouldPause ? "ההאכלה הושהתה" : "ההאכלה נמשכת",
+      };
+    }
+
+    if (name === "start_second_side") {
+      const active = getActiveFeeding();
+      if (!active) throw new Error("אין הנקה פעילה");
+      if (isBottleFeeding(active)) throw new Error("קינוח זמין רק בהנקה");
+      if (!active.dessertSide) toggleDessert();
+      return {
+        success: true,
+        message: "Second-side phase started.",
+        data: agentFeedingRecord(active),
+        uiMessage: `התחלתי צד שני: ${sideLabel(active.dessertSide)}`,
+      };
+    }
+
+    if (name === "log_diaper") return logDiaperFromAgent(args);
+    if (name === "log_completed_feeding") return logCompletedFeedingFromAgent(args);
+    if (name === "log_bottle") return logBottleFromAgent(args);
+    if (name === "log_pump") return logPumpFromAgent(args);
+    if (name === "update_event") return updateEventFromAgent(args);
+
+    if (name === "request_delete_event") {
+      const type = String(args.event_type || "");
+      const id = String(args.event_id || "");
+      if (!["feeding", "diaper", "bottle", "pump"].includes(type)) throw new Error("סוג האירוע אינו תקין");
+      const item = findEvent(type, id);
+      if (!item) throw new Error("האירוע לא נמצא");
+      const label = eventDeleteLabel(type, item);
+      return queuePendingAgentAction({
+        title: "מחיקת פעולה",
+        text: `למחוק את ${label} מהיומן?`,
+        confirmLabel: "מחיקה",
+        execute: () => {
+          deleteEvent(type, id);
+          return `מחקתי את ${label}`;
+        },
+      });
+    }
+
+    if (name === "request_reset_data") {
+      return queuePendingAgentAction({
+        title: "איפוס כל הנתונים",
+        text: "למחוק את כל נתוני המעקב של המשתמש הנוכחי? לא ניתן לבטל זאת לאחר סגירת ההודעה.",
+        confirmLabel: "איפוס",
+        execute: () => {
+          resetCurrentUserData();
+          return "כל נתוני המעקב אופסו";
+        },
+      });
+    }
+
+    if (name === "export_data") {
+      exportData();
+      return { success: true, message: "CSV export started.", uiMessage: "התחלתי ייצוא לקובץ Excel" };
+    }
+
+    if (name === "sync_now") {
+      await manualSyncNow();
+      return {
+        success: true,
+        message: "Sync attempt completed.",
+        data: { syncStatus: els.syncStatus.textContent },
+        uiMessage: els.syncStatus.textContent,
+      };
+    }
+
+    if (name === "update_tracking_settings") return updateTrackingSettingsFromAgent(args);
+
+    if (name === "request_update_partner_emails") {
+      const emails = parseAgentEmailList(args.emails_json);
+      return queuePendingAgentAction({
+        title: "עדכון שיתוף משפחתי",
+        text: emails.length ? `לשתף את היומן עם ${emails.join(", ")}?` : "להסיר את כל כתובות השיתוף?",
+        confirmLabel: "שמירה",
+        execute: () => {
+          state.sync.partnerEmails = emails;
+          pendingFamilyInvitation = null;
+          saveState();
+          renderSyncSettings();
+          connectCloudSync();
+          return emails.length ? "השיתוף המשפחתי עודכן" : "כתובות השיתוף הוסרו";
+        },
+      });
+    }
+
+    if (name === "request_set_notifications") {
+      const enabled = Boolean(args.enabled);
+      if (enabled === notificationsEnabled()) {
+        return { success: true, message: `Notifications are already ${enabled ? "enabled" : "disabled"}.` };
+      }
+      return queuePendingAgentAction({
+        title: enabled ? "הפעלת התראות" : "כיבוי התראות",
+        text: enabled
+          ? "לאפשר לאפליקציה להציג התראה לקראת ההאכלה הבאה?"
+          : "לכבות את התראות ההאכלה?",
+        confirmLabel: enabled ? "אפשר התראות" : "כיבוי",
+        execute: async () => {
+          await toggleNotifications();
+          return enabled && notificationsEnabled() ? "ההתראות הופעלו" : "ההתראות כובו";
+        },
+      });
+    }
+
+    throw new Error("הפעולה שביקש Gemini אינה מוכרת");
+  } catch (error) {
+    return { success: false, status: "validation_error", message: String(error?.message || error) };
+  }
+}
+
+function finishActiveFeedingFromAgent(args) {
+  const active = getActiveFeeding();
+  if (!active) throw new Error("אין האכלה פעילה");
+  const previous = clone(active);
+  const now = new Date().toISOString();
+
+  if (isBottleFeeding(active)) {
+    const amount = Number(args.amount);
+    const unit = normalizeAgentUnit(args.unit);
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("צריך לציין כמה התינוקת שתתה");
+    const pump = findEvent("pump", active.pumpId);
+    const validationError = validateBottleAmountAgainstPump(pump, amount, unit, active.id);
+    if (validationError) throw new Error(validationError);
+    active.amountValue = String(amount);
+    active.amountUnit = unit;
+  }
+
+  closeOpenPause(active, now);
+  closeOpenDessert(active, now);
+  active.endedAt = now;
+  touchRecord(active);
+  saveState();
+  render();
+  showUndo(isBottleFeeding(active) ? "הבקבוק הסתיים" : "ההנקה הסתיימה", () => restoreFeeding(previous));
+  return {
+    success: true,
+    message: "Active feeding finished.",
+    data: agentFeedingRecord(active),
+    uiMessage: isBottleFeeding(active) ? "סיימתי את הבקבוק" : "סיימתי את ההנקה",
+  };
+}
+
+function logDiaperFromAgent(args) {
+  const type = String(args.diaper_type || "");
+  if (!["pee", "poop", "both"].includes(type)) throw new Error("סוג החיתול אינו תקין");
+  const createdAt = parseAgentDate(args.occurred_at);
+  const now = new Date().toISOString();
+  const diaper = {
+    id: crypto.randomUUID(),
+    type,
+    createdAt,
+    createdBy: currentUser.id,
+    updatedAt: now,
+    updatedBy: currentUser.id,
+  };
+  state.diapers.unshift(diaper);
+  saveState();
+  render();
+  showUndo(`נרשם ${diaperLabel(type)}`, () => {
+    state.diapers = state.diapers.filter((item) => item.id !== diaper.id);
+    trackDeletedEvent("diaper", diaper.id);
+    saveState();
+    render();
+  });
+  return {
+    success: true,
+    message: "Diaper logged.",
+    data: { id: diaper.id, type, createdAt },
+    uiMessage: `רשמתי ${diaperLabel(type)} ב-${formatTime(createdAt)}`,
+  };
+}
+
+function logCompletedFeedingFromAgent(args) {
+  const side = String(args.side || "");
+  if (!["left", "right"].includes(side)) throw new Error("צריך לבחור צד ימין או שמאל");
+  const startedAt = parseAgentDate(args.started_at);
+  const endedAt = parseAgentDate(args.ended_at);
+  if (new Date(endedAt) <= new Date(startedAt)) throw new Error("שעת הסיום חייבת להיות אחרי שעת ההתחלה");
+  const feeding = {
+    id: crypto.randomUUID(),
+    side,
+    startedAt,
+    endedAt,
+    pauses: [],
+    createdBy: currentUser.id,
+  };
+  upsertById(state.feedings, feeding);
+  saveState();
+  render();
+  showUndo("ההנקה נוספה", () => {
+    state.feedings = state.feedings.filter((item) => item.id !== feeding.id);
+    trackDeletedEvent("feeding", feeding.id);
+    saveState();
+    render();
+  });
+  return {
+    success: true,
+    message: "Completed feeding logged.",
+    data: agentFeedingRecord(feeding),
+    uiMessage: `רשמתי הנקה מצד ${sideLabel(side)} ב-${formatTime(startedAt)}`,
+  };
+}
+
+function logBottleFromAgent(args) {
+  const amount = Number(args.amount);
+  const unit = normalizeAgentUnit(args.unit);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("כמות הבקבוק חייבת להיות גדולה מאפס");
+  const createdAt = parseAgentDate(args.occurred_at);
+  const bottle = {
+    id: crypto.randomUUID(),
+    amountValue: String(amount),
+    amountUnit: unit,
+    createdAt,
+    createdBy: currentUser.id,
+  };
+  upsertById(state.bottles, bottle);
+  saveState();
+  render();
+  showUndo("נרשם בקבוק", () => {
+    state.bottles = state.bottles.filter((item) => item.id !== bottle.id);
+    trackDeletedEvent("bottle", bottle.id);
+    saveState();
+    render();
+  });
+  return {
+    success: true,
+    message: "Bottle logged.",
+    data: { id: bottle.id, amount, unit, createdAt },
+    uiMessage: `רשמתי בקבוק של ${formatAmount(bottle)}`,
+  };
+}
+
+function logPumpFromAgent(args) {
+  const amount = Number(args.amount);
+  const unit = normalizeAgentUnit(args.unit);
+  const storage = String(args.storage || "");
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("כמות השאיבה חייבת להיות גדולה מאפס");
+  if (!MILK_STORAGE_RULES[storage]) throw new Error("מיקום האחסון אינו תקין");
+  const createdAt = parseAgentDate(args.occurred_at);
+  const storageDates = buildPumpStorageDates({ storage, createdAt });
+  const pump = {
+    id: crypto.randomUUID(),
+    pumpCode: createPumpCode(),
+    amountValue: String(amount),
+    amountUnit: unit,
+    storage,
+    createdAt,
+    recommendedUntil: storageDates.recommendedUntil,
+    expiresAt: storageDates.expiresAt,
+    createdBy: currentUser.id,
+  };
+  upsertById(state.pumps, pump);
+  saveState();
+  render();
+  showUndo("נרשמה שאיבה", () => {
+    state.pumps = state.pumps.filter((item) => item.id !== pump.id);
+    trackDeletedEvent("pump", pump.id);
+    saveState();
+    render();
+  });
+  return {
+    success: true,
+    message: "Pumping record logged.",
+    data: {
+      id: pump.id,
+      code: pumpCode(pump),
+      amount,
+      unit,
+      createdAt,
+      storage,
+      storageStatus: formatMilkStorageStatus(pump),
+    },
+    uiMessage: `רשמתי שאיבה ${pumpCode(pump)} · ${formatAmount(pump)}`,
+  };
+}
+
+function updateEventFromAgent(args) {
+  const type = String(args.event_type || "");
+  const id = String(args.event_id || "");
+  if (!["feeding", "diaper", "bottle", "pump"].includes(type)) throw new Error("סוג האירוע אינו תקין");
+  const item = findEvent(type, id);
+  if (!item) throw new Error("האירוע לא נמצא");
+
+  let changes;
+  try {
+    changes = JSON.parse(String(args.changes_json || "{}"));
+  } catch {
+    throw new Error("פרטי העדכון אינם JSON תקין");
+  }
+  if (!changes || Array.isArray(changes) || typeof changes !== "object") throw new Error("פרטי העדכון אינם תקינים");
+
+  const previous = clone(item);
+  const allowedFields = {
+    feeding: [
+      "startedAt",
+      "endedAt",
+      "side",
+      "amountValue",
+      "amountUnit",
+      "pumpId",
+      "dessertSide",
+      "dessertStartedAt",
+      "dessertEndedAt",
+    ],
+    diaper: ["createdAt", "type"],
+    bottle: ["createdAt", "amountValue", "amountUnit", "pumpId"],
+    pump: ["createdAt", "amountValue", "amountUnit", "storage"],
+  };
+  const keys = Object.keys(changes);
+  if (!keys.length) throw new Error("לא נשלחו שדות לעדכון");
+  const forbidden = keys.find((key) => !allowedFields[type].includes(key));
+  if (forbidden) throw new Error(`אי אפשר לעדכן את השדה ${forbidden}`);
+
+  if ("side" in changes && !["left", "right", "bottle"].includes(changes.side)) throw new Error("צד ההאכלה אינו תקין");
+  if ("dessertSide" in changes && !["", "left", "right"].includes(changes.dessertSide)) {
+    throw new Error("צד הקינוח אינו תקין");
+  }
+  if ("type" in changes && !["pee", "poop", "both"].includes(changes.type)) throw new Error("סוג החיתול אינו תקין");
+  if ("amountUnit" in changes) changes.amountUnit = normalizeAgentUnit(changes.amountUnit);
+  if ("amountValue" in changes) {
+    const amount = Number(changes.amountValue);
+    if (!Number.isFinite(amount) || amount < 0) throw new Error("הכמות אינה תקינה");
+    changes.amountValue = String(amount);
+  }
+  if ("storage" in changes && !MILK_STORAGE_RULES[changes.storage]) throw new Error("מיקום האחסון אינו תקין");
+  if ("startedAt" in changes) changes.startedAt = parseAgentDate(changes.startedAt);
+  if ("endedAt" in changes) changes.endedAt = parseAgentDate(changes.endedAt);
+  if ("createdAt" in changes) changes.createdAt = parseAgentDate(changes.createdAt);
+  if ("dessertStartedAt" in changes) changes.dessertStartedAt = parseAgentDate(changes.dessertStartedAt);
+  if ("dessertEndedAt" in changes) changes.dessertEndedAt = parseAgentDate(changes.dessertEndedAt);
+  if ("pumpId" in changes && changes.pumpId && !findEvent("pump", changes.pumpId)) {
+    throw new Error("השאיבה המקושרת לא נמצאה");
+  }
+
+  Object.assign(item, changes);
+  if (type === "feeding" && item.endedAt && new Date(item.endedAt) <= new Date(item.startedAt)) {
+    Object.assign(item, previous);
+    throw new Error("שעת הסיום חייבת להיות אחרי שעת ההתחלה");
+  }
+  if (
+    type === "feeding"
+    && item.dessertStartedAt
+    && new Date(item.dessertStartedAt) < new Date(item.startedAt)
+  ) {
+    Object.assign(item, previous);
+    throw new Error("הקינוח לא יכול להתחיל לפני ההנקה");
+  }
+  if (
+    type === "feeding"
+    && item.dessertEndedAt
+    && new Date(item.dessertEndedAt) < new Date(item.dessertStartedAt || item.startedAt)
+  ) {
+    Object.assign(item, previous);
+    throw new Error("סיום הקינוח חייב להיות אחרי תחילת הקינוח");
+  }
+  if (type === "feeding" && item.pumpId) {
+    const pump = findEvent("pump", item.pumpId);
+    const validationError = validateBottleAmountAgainstPump(
+      pump,
+      amountValue(item),
+      amountUnit(item),
+      item.id,
+    );
+    if (validationError) {
+      Object.assign(item, previous);
+      throw new Error(validationError);
+    }
+  }
+  if (type === "bottle" && item.pumpId) {
+    const pump = findEvent("pump", item.pumpId);
+    if (!pump) {
+      Object.assign(item, previous);
+      throw new Error("השאיבה המקושרת לא נמצאה");
+    }
+    if (amountUnit(pump) !== amountUnit(item)) {
+      Object.assign(item, previous);
+      throw new Error(`היחידה חייבת להתאים לשאיבה: ${amountUnitLabel(amountUnit(pump))}`);
+    }
+    const total = numericAmount(pump);
+    const previousUse = previous.pumpId === pump.id ? comparableAmount(previous, amountUnit(pump)) : 0;
+    const available = total === null ? null : total - getPumpUsedAmount(pump) + previousUse;
+    if (available !== null && (numericAmount(item) ?? 0) > available) {
+      Object.assign(item, previous);
+      throw new Error(`אי אפשר לרשום יותר מהיתרה בשאיבה הזו: ${formatNumber(Math.max(0, available))} ${amountUnitLabel(amountUnit(pump))}`);
+    }
+  }
+  if (type === "pump" && ("createdAt" in changes || "storage" in changes)) {
+    const dates = buildPumpStorageDates(item);
+    item.recommendedUntil = dates.recommendedUntil;
+    item.expiresAt = dates.expiresAt;
+  }
+  if (type === "pump" && getPumpUsedAmount(item) > (numericAmount(item) ?? 0)) {
+    Object.assign(item, previous);
+    throw new Error("אי אפשר להקטין את השאיבה מתחת לכמות שכבר נצרכה");
+  }
+
+  touchRecord(item);
+  saveState();
+  render();
+  showUndo("הפעולה עודכנה", () => {
+    Object.assign(item, previous);
+    touchRecord(item);
+    saveState();
+    render();
+  });
+  return {
+    success: true,
+    message: "Event updated.",
+    data: { eventType: type, eventId: id, changes },
+    uiMessage: "עדכנתי את הפעולה ביומן",
+  };
+}
+
+function updateTrackingSettingsFromAgent(args) {
+  const feedingIntervalHours = Number(args.feeding_interval_hours);
+  const sleepyReminderMinutes = Number(args.sleepy_reminder_minutes);
+  const dailyPeeGoal = Number(args.daily_pee_goal);
+  const dailyPoopGoal = Number(args.daily_poop_goal);
+  if (!Number.isFinite(feedingIntervalHours) || feedingIntervalHours < 1 || feedingIntervalHours > 12) {
+    throw new Error("מרווח ההאכלה צריך להיות בין שעה ל-12 שעות");
+  }
+  if (!Number.isFinite(sleepyReminderMinutes) || sleepyReminderMinutes < 1 || sleepyReminderMinutes > 60) {
+    throw new Error("תזכורת ההירדמות צריכה להיות בין דקה ל-60 דקות");
+  }
+  if (!Number.isFinite(dailyPeeGoal) || dailyPeeGoal < 0 || dailyPeeGoal > 20) {
+    throw new Error("יעד הפיפי צריך להיות בין 0 ל-20");
+  }
+  if (!Number.isFinite(dailyPoopGoal) || dailyPoopGoal < 0 || dailyPoopGoal > 20) {
+    throw new Error("יעד הקקי צריך להיות בין 0 ל-20");
+  }
+
+  state.settings = {
+    ...state.settings,
+    feedingIntervalHours,
+    sleepyReminderMinutes,
+    dailyPeeGoal,
+    dailyPoopGoal,
+  };
+  saveState();
+  clearNextFeedingNotification();
+  render();
+  return {
+    success: true,
+    message: "Tracking settings updated.",
+    data: clone(state.settings),
+    uiMessage: "עדכנתי את הגדרות המעקב",
+  };
+}
+
+function queuePendingAgentAction({ title, text, confirmLabel, execute }) {
+  if (pendingAgentAction) {
+    return {
+      success: false,
+      status: "confirmation_already_pending",
+      message: "Another action is already waiting for user confirmation.",
+    };
+  }
+
+  pendingAgentAction = { title, text, execute };
+  els.agentPendingTitle.textContent = title;
+  els.agentPendingText.textContent = text;
+  els.confirmAgentActionButton.textContent = confirmLabel || "אישור";
+  els.agentPendingAction.hidden = false;
+  els.agentPendingAction.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  return {
+    success: false,
+    status: "confirmation_required",
+    message: text,
+    uiMessage: "ממתין לאישור שלך לפני ביצוע הפעולה",
+  };
+}
+
+async function resolvePendingAgentAction(confirmed) {
+  const pending = pendingAgentAction;
+  if (!pending) return;
+  pendingAgentAction = null;
+  els.agentPendingAction.hidden = true;
+
+  if (!confirmed) {
+    appendAgentMessage("action", "הפעולה בוטלה");
+    return;
+  }
+
+  els.confirmAgentActionButton.disabled = true;
+  els.cancelAgentActionButton.disabled = true;
+  try {
+    const message = await pending.execute();
+    appendAgentMessage("action", message || "הפעולה בוצעה");
+    setAgentConnection("ready", "Gemini מוכן");
+  } catch (error) {
+    const message = String(error?.message || error);
+    appendAgentMessage("assistant", message);
+    setAgentConnection("error", message);
+  } finally {
+    els.confirmAgentActionButton.disabled = false;
+    els.cancelAgentActionButton.disabled = false;
+  }
+}
+
+function parseAgentDate(value) {
+  const raw = String(value || "").trim();
+  const date = !raw || ["now", "עכשיו"].includes(raw.toLowerCase()) ? new Date() : new Date(raw);
+  if (!Number.isFinite(date.getTime())) throw new Error("התאריך או השעה אינם תקינים");
+  if (date.getTime() > Date.now() + 60 * 1000) throw new Error("אי אפשר לרשום פעולה בעתיד");
+  return date.toISOString();
+}
+
+function normalizeAgentUnit(value) {
+  const unit = String(value || "ml");
+  if (!["ml", "oz", "spoon", "other"].includes(unit)) throw new Error("יחידת הכמות אינה תקינה");
+  return unit;
+}
+
+function parseAgentEmailList(value) {
+  let emails;
+  try {
+    emails = JSON.parse(String(value || "[]"));
+  } catch {
+    throw new Error("רשימת האימיילים אינה תקינה");
+  }
+  if (!Array.isArray(emails)) throw new Error("רשימת האימיילים אינה תקינה");
+  const normalized = normalizeEmailList(emails);
+  const invalid = normalized.find((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+  if (invalid) throw new Error(`כתובת האימייל ${invalid} אינה תקינה`);
+  return normalized;
+}
+
+function agentErrorMessage(error) {
+  const raw = String(error?.message || error || "");
+  if (!navigator.onLine) return "אין חיבור לאינטרנט. נתוני המעקב נשארו שמורים במכשיר.";
+  if (/app.?check|403|permission|forbidden/i.test(raw)) {
+    return "כדי להפעיל את Gemini צריך להשלים את הגדרת Firebase AI Logic ו-App Check בפרויקט.";
+  }
+  if (/429|quota|resource.?exhausted/i.test(raw)) return "מכסת Gemini הסתיימה כרגע. כדאי לנסות שוב מעט מאוחר יותר.";
+  if (/not.?found|404|model/i.test(raw)) return "מודל Gemini שהוגדר אינו זמין בפרויקט Firebase הזה.";
+  if (/Firebase אינו מוגדר/.test(raw)) return raw;
+  return "לא הצלחתי להתחבר ל-Gemini כרגע. נתוני האפליקציה לא השתנו.";
+}
+
 function toggleMenu() {
   if (els.menu.classList.contains("is-open")) closeMenu();
   else openMenu();
@@ -2310,7 +3417,7 @@ function renderFeeding(active, latest, latestStarted) {
 
   if (latest) {
     const nextSide = nextStartSide(latest);
-    const nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + FEEDING_INTERVAL_MS);
+    const nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + getFeedingIntervalMs());
     els.nextSideText.textContent = nextSide ? sideLabel(nextSide) : "אין נתונים";
     els.lastFeedText.textContent = `${isBottleFeeding(latest) ? "בקבוק אחרון" : "הנקה אחרונה"}: ${feedingSummary(latest)} · ${latest.endedAt ? "הסתיימה" : "התחילה"} ב-${formatTime(getFeedingIntervalBaseDate(latest))}`;
     els.nextFeedText.textContent = formatTime(nextFeed);
@@ -2337,7 +3444,7 @@ function scheduleNextFeedingNotification(nextFeed) {
   if (!nextFeed) {
     const latest = getLatestFeeding();
     if (!latest) return;
-    nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + FEEDING_INTERVAL_MS);
+    nextFeed = new Date(getFeedingIntervalBaseDate(latest).getTime() + getFeedingIntervalMs());
   }
 
   if (!notificationsEnabled() || Notification.permission !== "granted") return;
@@ -2441,12 +3548,14 @@ function renderDiapers() {
   const poopCount = todaysDiapers.filter((item) => item.type === "poop" || item.type === "both").length;
   const latestDiaper = getLatestByDate(state.diapers, "createdAt");
 
-  els.peeGoal.textContent = `${peeCount}/${PEE_GOAL}`;
-  els.poopGoal.textContent = `${poopCount}/${POOP_GOAL}`;
-  els.peeBar.style.width = `${Math.min(100, (peeCount / PEE_GOAL) * 100)}%`;
-  els.poopBar.style.width = `${Math.min(100, (poopCount / POOP_GOAL) * 100)}%`;
-  els.peeGoal.closest(".goal").classList.toggle("complete", peeCount >= PEE_GOAL);
-  els.poopGoal.closest(".goal").classList.toggle("complete", poopCount >= POOP_GOAL);
+  const peeGoal = Math.max(0, Number(state.settings.dailyPeeGoal ?? PEE_GOAL));
+  const poopGoal = Math.max(0, Number(state.settings.dailyPoopGoal ?? POOP_GOAL));
+  els.peeGoal.textContent = `${peeCount}/${peeGoal}`;
+  els.poopGoal.textContent = `${poopCount}/${poopGoal}`;
+  els.peeBar.style.width = `${peeGoal === 0 ? 100 : Math.min(100, (peeCount / peeGoal) * 100)}%`;
+  els.poopBar.style.width = `${poopGoal === 0 ? 100 : Math.min(100, (poopCount / poopGoal) * 100)}%`;
+  els.peeGoal.closest(".goal").classList.toggle("complete", peeCount >= peeGoal);
+  els.poopGoal.closest(".goal").classList.toggle("complete", poopCount >= poopGoal);
   els.lastDiaperText.textContent = latestDiaper ? `אחרון: ${timeAgo(new Date(latestDiaper.createdAt))}` : "עוד אין חיתולים";
 }
 
@@ -2737,7 +3846,7 @@ function maybeShowSleepyReminder(active) {
   const elapsed = Date.now() - new Date(active.startedAt).getTime();
   const hasPause = active.pauses.length > 0;
 
-  if (elapsed >= SLEEPY_REMINDER_MS && !hasPause) {
+  if (elapsed >= getSleepyReminderMs() && !hasPause) {
     active.sleepyReminderShownAt = new Date().toISOString();
     touchRecord(active);
     saveState();
@@ -3365,6 +4474,16 @@ function normalizeEndDate(startIso, endIso) {
   const end = new Date(endIso);
   if (end < start) end.setDate(end.getDate() + 1);
   return end.toISOString();
+}
+
+function getFeedingIntervalMs() {
+  const hours = Number(state.settings?.feedingIntervalHours);
+  return Number.isFinite(hours) && hours > 0 ? hours * HOUR_MS : FEEDING_INTERVAL_MS;
+}
+
+function getSleepyReminderMs() {
+  const minutes = Number(state.settings?.sleepyReminderMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : SLEEPY_REMINDER_MS;
 }
 
 function getTodayKey() {

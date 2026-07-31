@@ -28,12 +28,17 @@
           <span>מעקב רגוע, גם ב-3 בלילה</span>
         </div>
       </div>
-      <button class="top-icon manual-sync-button" id="manualSyncButton" type="button" aria-label="סנכרון עכשיו" title="סנכרון עכשיו">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M20 7v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          <path d="M18.2 15a7 7 0 1 1-1.1-7.8L20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </button>
+      <div class="top-actions">
+        <button class="top-icon agent-launch-button" id="agentButton" type="button" aria-label="פתיחת עוזר Gemini" title="עוזר Gemini">
+          <span aria-hidden="true">✦</span>
+        </button>
+        <button class="top-icon manual-sync-button" id="manualSyncButton" type="button" aria-label="סנכרון עכשיו" title="סנכרון עכשיו">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 7v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M18.2 15a7 7 0 1 1-1.1-7.8L20 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <div class="menu-backdrop" id="menuBackdrop" hidden></div>
@@ -547,6 +552,60 @@
           <button class="finish-action full-width" value="save">שמירה</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog class="agent-dialog" id="agentDialog" aria-labelledby="agentDialogTitle">
+      <section class="agent-shell">
+        <header class="agent-header">
+          <div class="agent-title-row">
+            <span class="agent-mark" aria-hidden="true">✦</span>
+            <div>
+              <span class="overline">Gemini</span>
+              <h2 id="agentDialogTitle">העוזר של NewBorn Helper</h2>
+            </div>
+          </div>
+          <button class="top-icon compact" id="closeAgentButton" type="button" aria-label="סגירת העוזר">×</button>
+        </header>
+
+        <div class="agent-connection" id="agentConnection" role="status">
+          <span class="agent-connection-dot" aria-hidden="true"></span>
+          <span id="agentConnectionText">מוכן לעזור</span>
+        </div>
+
+        <div class="agent-messages" id="agentMessages" role="log" aria-live="polite" aria-relevant="additions">
+          <article class="agent-message is-assistant">
+            <span class="agent-avatar" aria-hidden="true">✦</span>
+            <div>
+              <p>היי, אני מכיר את היומן ואת כל פעולות האפליקציה.</p>
+              <p>אפשר לבקש ממני לרשום חיתול, להתחיל הנקה, לסכם את היום או למצוא אירוע ביומן.</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="agent-pending-action" id="agentPendingAction" hidden>
+          <strong id="agentPendingTitle">נדרש אישור</strong>
+          <p id="agentPendingText"></p>
+          <div class="agent-pending-buttons">
+            <button class="ghost-action" id="cancelAgentActionButton" type="button">ביטול</button>
+            <button class="finish-action" id="confirmAgentActionButton" type="button">אישור</button>
+          </div>
+        </div>
+
+        <div class="agent-suggestions" aria-label="הצעות מהירות">
+          <button type="button" data-agent-prompt="סכם לי את היום עד עכשיו">סיכום היום</button>
+          <button type="button" data-agent-prompt="רשום חיתול פיפי עכשיו">רישום פיפי</button>
+          <button type="button" data-agent-prompt="מתי צפויה ההאכלה הבאה?">האכלה הבאה</button>
+        </div>
+
+        <form class="agent-composer" id="agentForm">
+          <label class="sr-only" for="agentInput">כתיבה לעוזר</label>
+          <textarea id="agentInput" rows="1" maxlength="700" placeholder="למשל: התחילי הנקה מצד שמאל"></textarea>
+          <button class="agent-send-button" id="agentSendButton" type="submit" aria-label="שליחה">
+            <span aria-hidden="true">↑</span>
+          </button>
+        </form>
+        <p class="agent-privacy">נתוני המעקב הרלוונטיים לבקשה נשלחים ל-Gemini. העוזר אינו תחליף לייעוץ רפואי.</p>
+      </section>
     </dialog>
 
     <script src="config.js"></script>
