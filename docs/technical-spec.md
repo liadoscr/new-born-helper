@@ -101,7 +101,7 @@ Angular PWA
 
 The assistant is implemented with the Firebase AI Logic Web SDK and the Gemini Developer API.
 
-- Default model: `gemini-3.5-flash`.
+- Default model: `gemini-3.1-flash-lite` with minimal thinking for low-latency app interactions.
 - Security boundary: Firebase App Check with reCAPTCHA Enterprise; no Gemini secret is shipped to the browser.
 - Context boundary: only tracker state required for the request is provided. User email addresses, partner email addresses, Firebase tokens, and deleted-event tombstones are excluded.
 - Execution boundary: Gemini proposes typed function calls, while local deterministic handlers validate and perform state changes through the existing persistence and sync path.

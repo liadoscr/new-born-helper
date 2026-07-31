@@ -17,7 +17,7 @@ const CLOUD_REFRESH_THROTTLE_MS = 10 * 1000;
 const CLOUD_VISIBLE_REFRESH_MS = 30 * 1000;
 const FAST_SYNC_MAX_BATCH_BYTES = 48 * 1024;
 const FAST_SYNC_MAX_BATCH_ITEMS = 20;
-const AGENT_DEFAULT_MODEL = "gemini-3.5-flash";
+const AGENT_DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const AGENT_MAX_TOOL_ROUNDS = 6;
 const AGENT_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -2001,7 +2001,7 @@ async function loadGeminiAgent() {
       tools: buildAgentTools(aiModule.Schema),
       generationConfig: {
         maxOutputTokens: 1024,
-        thinkingConfig: { thinkingLevel: aiModule.ThinkingLevel.LOW },
+        thinkingConfig: { thinkingLevel: aiModule.ThinkingLevel.MINIMAL },
       },
     }, {
       timeout: AGENT_REQUEST_TIMEOUT_MS,
