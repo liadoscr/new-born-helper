@@ -19,6 +19,7 @@ const FAST_SYNC_MAX_BATCH_BYTES = 48 * 1024;
 const FAST_SYNC_MAX_BATCH_ITEMS = 20;
 const AGENT_DEFAULT_MODEL = "gemini-3.5-flash";
 const AGENT_MAX_TOOL_ROUNDS = 6;
+const AGENT_REQUEST_TIMEOUT_MS = 30_000;
 
 const AGENT_SYSTEM_INSTRUCTION = `
 Role: You are the in-app assistant for NewBorn Helper, a Hebrew-first newborn feeding and care tracker.
@@ -1998,6 +1999,12 @@ async function loadGeminiAgent() {
       model: configuredModel || AGENT_DEFAULT_MODEL,
       systemInstruction: AGENT_SYSTEM_INSTRUCTION,
       tools: buildAgentTools(aiModule.Schema),
+      generationConfig: {
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingLevel: aiModule.ThinkingLevel.LOW },
+      },
+    }, {
+      timeout: AGENT_REQUEST_TIMEOUT_MS,
     });
     agentChat = agentModel.startChat();
     return agentModel;
@@ -2341,6 +2348,7 @@ async function sendAgentMessage(message) {
 
     throw new Error("Gemini ביקש יותר מדי פעולות ברצף");
   } catch (error) {
+    console.error("Gemini agent request failed", error);
     const messageText = agentErrorMessage(error);
     appendAgentMessage("assistant", messageText);
     setAgentConnection("error", messageText);
@@ -2937,6 +2945,12 @@ function parseAgentEmailList(value) {
 function agentErrorMessage(error) {
   const raw = String(error?.message || error || "");
   if (!navigator.onLine) return "אין חיבור לאינטרנט. נתוני המעקב נשארו שמורים במכשיר.";
+  if (/timeout|timed out|deadline|abort/i.test(raw)) {
+    return "Gemini לא החזיר תשובה בזמן. כדאי לנסות שוב עם בקשה קצרה יותר.";
+  }
+  if (/genai config not found/i.test(raw)) {
+    return "צריך להשלים את הפעלת Gemini Developer API במסך Firebase AI Logic.";
+  }
   if (/app.?check|403|permission|forbidden/i.test(raw)) {
     return "כדי להפעיל את Gemini צריך להשלים את הגדרת Firebase AI Logic ו-App Check בפרויקט.";
   }
