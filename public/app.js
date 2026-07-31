@@ -2319,7 +2319,7 @@ async function sendAgentMessage(message) {
 
     let result = await agentChat.sendMessage(buildAgentPrompt(nextMessage));
     for (let round = 0; round < AGENT_MAX_TOOL_ROUNDS; round += 1) {
-      const calls = result.response.functionCalls();
+      const calls = result.response.functionCalls() || [];
       if (!calls.length) {
         const text = result.response.text().trim();
         appendAgentMessage("assistant", text || "הפעולה הושלמה.");
